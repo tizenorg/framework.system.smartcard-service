@@ -1,0 +1,17 @@
+obj-arm-linux-gnueabi
+.cproject
+.project
+debian/files
+debian/*.debhelper.log
+debian/smartcard-service-common-dbg/
+debian/smartcard-service-common-dev/
+debian/smartcard-service-common/
+debian/smartcard-service-dbg/
+debian/smartcard-service-dev/
+debian/smartcard-service-server-dbg/
+debian/smartcard-service-server/
+debian/*.debhelper
+debian/*.substvars
+debian/smartcard-service/
+debian/tmp/
+gbs_temp

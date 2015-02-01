@@ -14,60 +14,48 @@
  * limitations under the License.
  */
 
-#ifndef SERVERIPC_H_
-#define SERVERIPC_H_
+#ifndef GPACE_H_
+#define GPACE_H_
 
 /* standard library header */
-#ifdef __cplusplus
-#include <map>
-#endif /* __cplusplus */
 
 /* SLP library header */
 
 /* local header */
+#include "smartcard-types.h"
 #ifdef __cplusplus
-#include "IPCHelper.h"
+#include "AccessControlList.h"
 #endif /* __cplusplus */
 
 #ifdef __cplusplus
-using namespace std;
-
 namespace smartcard_service_api
 {
-	class ServerIPC: public IPCHelper
+	class GPACE : public AccessControlList
 	{
-	private:
-		ServerIPC();
-		~ServerIPC();
+	private :
+		AccessControlList *acl;
 
-		bool acceptClient();
-		void restartServerIPC();
-		void releaseClient(void *channel, int socket, int watchID);
+	public :
+		GPACE();
+		~GPACE();
 
-		int handleIOErrorCondition(void *channel, GIOCondition condition);
-		int handleInvalidSocketCondition(void *channel, GIOCondition condition);
-		int handleIncomingCondition(void *channel, GIOCondition condition);
+		int loadACL(Channel *channel);
 
-	public:
-		static ServerIPC *getInstance();
-		Message *retrieveMessage(int socket);
-
-		friend class ServerResource;
+		bool isAuthorizedAccess(const ByteArray &aid,
+			const ByteArray &certHash) const;
+		bool isAuthorizedAccess(const unsigned char *aidBuffer,
+			unsigned int aidLength,
+			const unsigned char *certHashBuffer,
+			unsigned int certHashLength) const;
+		bool isAuthorizedAccess(const ByteArray &aid,
+			const vector<ByteArray> &certHashes) const;
+		bool isAuthorizedAccess(const ByteArray &aid,
+			const vector<ByteArray> &certHashes,
+			const ByteArray &command) const;
+		bool isAuthorizedNFCAccess(const ByteArray &aid,
+			const vector<ByteArray> &certHashes) const;
 	};
 
 } /* namespace smartcard_service_api */
 #endif /* __cplusplus */
-
-/* export C API */
-#ifdef __cplusplus
-extern "C"
-{
-#endif /* __cplusplus */
-
-void server_ipc_create_listen_socket();
-
-#ifdef __cplusplus
-}
-#endif /* __cplusplus */
-
-#endif /* SERVERIPC_H_ */
+#endif /* GPACE_H_ */

@@ -26,23 +26,23 @@
 #include "ServerReader.h"
 #include "ServerChannel.h"
 #include "APDUHelper.h"
-#include "GPSEACL.h"
+#include "GPACE.h"
 
 namespace smartcard_service_api
 {
-	ServerSession::ServerSession(ServerReader *reader, vector<ByteArray> &certHashes, void *caller, Terminal *terminal):SessionHelper(reader)
+	ServerSession::ServerSession(ServerReader *reader,
+		const vector<ByteArray> &certHashes,
+		void *caller, Terminal *terminal) : SessionHelper(reader)
 	{
-		this->caller = NULL;
 		this->terminal = NULL;
 
-		if (caller == NULL || terminal == NULL)
+		if (terminal == NULL)
 		{
-			SCARD_DEBUG_ERR("invalid param");
+			_ERR("invalid param");
 
 			return;
 		}
 
-		this->caller = caller;
 		this->terminal = terminal;
 		this->certHashes = certHashes;
 	}
@@ -53,10 +53,28 @@ namespace smartcard_service_api
 			closeSync();
 	}
 
-	ByteArray ServerSession::getATRSync()
+	const ByteArray ServerSession::getATRSync()
 		throw(ErrorIO &, ErrorIllegalState &)
 	{
 		/* call get atr to terminal */
+		if (atr.isEmpty()) {
+			if (terminal != NULL) {
+				if (terminal->open() == true) {
+					int error = terminal->getATRSync(atr);
+
+					if (error < SCARD_ERROR_OK) {
+						_ERR("getATRSync failed, [%d]", error);
+					}
+
+					terminal->close();
+				} else {
+					_ERR("terminal->open failed");
+				}
+			} else {
+				_ERR("terminal is null.");
+			}
+		}
+
 		return atr;
 	}
 
@@ -84,54 +102,227 @@ namespace smartcard_service_api
 		channels.clear();
 	}
 
-	Channel *ServerSession::openBasicChannelSync(ByteArray aid)
+	Channel *ServerSession::openBasicChannelSync(const ByteArray &aid)
 		throw(ErrorIO &, ErrorIllegalState &, ErrorIllegalParameter &, ErrorSecurity &)
 	{
-		return openBasicChannelSync(aid, NULL);
+		return openBasicChannelSync(aid, (void *)NULL);
 	}
 
-	Channel *ServerSession::openBasicChannelSync(ByteArray aid, void *caller)
+	Channel *ServerSession::openBasicChannelSync(const ByteArray &aid, unsigned char P2)
+		throw(ErrorIO &, ErrorIllegalState &, ErrorIllegalParameter &, ErrorSecurity &)
+	{
+		return openBasicChannelSync(aid, (void *)NULL);
+	}
+
+	Channel *ServerSession::openBasicChannelSync(const ByteArray &aid, void *caller)
 		throw(ErrorIO &, ErrorIllegalState &, ErrorIllegalParameter &, ErrorSecurity &)
 	{
 		ServerChannel *channel = NULL;
+#if 0
+		AccessControlList *acList = NULL;
+		ByteArray command, result;
+		int channelID = 0;
+		int rv = 0;
+
+		_BEGIN();
+
+		acList = ((ServerReader *)reader)->getAccessControlList();
+		if (acList == NULL)
+		{
+			_ERR("acList is null");
+
+			return channel;
+		}
+
+		if (acList->isAuthorizedAccess(aid, certHashes) == false)
+		{
+			_ERR("unauthorized access, aid : %s", aid.toString().c_str());
+
+			return channel;
+		}
+
+		/* select aid */
+		command = APDUHelper::generateAPDU(APDUHelper::COMMAND_SELECT_BY_DF_NAME, channelID, aid);
+		rv = terminal->transmitSync(command, result);
+		if (rv == 0 && result.size() >= 2)
+		{
+			ResponseHelper resp(result);
+
+			if (resp.getStatus() == 0)
+			{
+				channel = new ServerChannel(this, caller, channelID, terminal);
+				if (channel != NULL)
+				{
+					channel->selectResponse = result;
+
+					channels.push_back(channel);
+				}
+				else
+				{
+					_ERR("alloc failed");
+				}
+			}
+			else
+			{
+				_ERR("status word [ %02X %02X ]", resp.getSW1(), resp.getSW2());
+			}
+		}
+		else
+		{
+			_ERR("select apdu is failed, rv [%d], length [%d]", rv, result.size());
+		}
+#endif
 		return channel;
 	}
 
-	Channel *ServerSession::openBasicChannelSync(unsigned char *aid, unsigned int length)
+	Channel *ServerSession::openBasicChannelSync(const unsigned char *aid, unsigned int length)
 		throw(ErrorIO &, ErrorIllegalState &, ErrorIllegalParameter &, ErrorSecurity &)
 	{
-		return openBasicChannelSync(ByteArray(aid, length));
+		unsigned char P2 = 0x00;
+		ByteArray temp(aid, length);
+
+		return openBasicChannelSync(temp, P2);
 	}
 
-	Channel *ServerSession::openBasicChannelSync(unsigned char *aid, unsigned int length, void *caller)
+	Channel *ServerSession::openBasicChannelSync(const unsigned char *aid, unsigned int length, unsigned char P2)
 		throw(ErrorIO &, ErrorIllegalState &, ErrorIllegalParameter &, ErrorSecurity &)
 	{
-		return openBasicChannelSync(ByteArray(aid, length), caller);
+		ByteArray temp(aid, length);
+
+		return openBasicChannelSync(temp, P2);
 	}
 
-	Channel *ServerSession::openLogicalChannelSync(ByteArray aid)
+	Channel *ServerSession::openBasicChannelSync(const unsigned char *aid, unsigned int length, void *caller)
 		throw(ErrorIO &, ErrorIllegalState &, ErrorIllegalParameter &, ErrorSecurity &)
 	{
-		return openLogicalChannelSync(aid, NULL);
+		ByteArray temp(aid, length);
+
+		return openBasicChannelSync(temp, caller);
 	}
 
-	Channel *ServerSession::openLogicalChannelSync(ByteArray aid, void *caller)
+	Channel *ServerSession::openLogicalChannelSync(const ByteArray &aid)
+		throw(ErrorIO &, ErrorIllegalState &, ErrorIllegalParameter &, ErrorSecurity &)
+	{
+		void* caller;
+		return openLogicalChannelSync(aid, caller);
+	}
+
+	Channel *ServerSession::openLogicalChannelSync(const ByteArray &aid, unsigned char P2)
+		throw(ErrorIO &, ErrorIllegalState &, ErrorIllegalParameter &, ErrorSecurity &)
+	{
+		void* caller;
+		return openLogicalChannelSync(aid, caller);
+	}
+
+	Channel *ServerSession::openLogicalChannelSync(const ByteArray &aid, void *caller)
 		throw(ErrorIO &, ErrorIllegalState &, ErrorIllegalParameter &, ErrorSecurity &)
 	{
 		ServerChannel *channel = NULL;
+#if 0
+		AccessControlList *acList = NULL;
+		ByteArray command, result;
+		int channelID = 1;
+		int rv;
+
+		acList = ((ServerReader *)reader)->getAccessControlList();
+		if (acList == NULL)
+		{
+			_ERR("unauthorized access, aid %s, hash %s");
+
+			return channel;
+		}
+
+		if (acList->isAuthorizedAccess(aid, certHashes) == false)
+		{
+			_ERR("unauthorized access, aid : %s", aid.toString().c_str());
+
+			return channel;
+		}
+
+		/* open channel */
+		command = APDUHelper::generateAPDU(APDUHelper::COMMAND_OPEN_LOGICAL_CHANNEL, 0, ByteArray::EMPTY);
+		rv = terminal->transmitSync(command, result);
+
+		if (rv == 0 && result.size() >= 2)
+		{
+			ResponseHelper resp(result);
+
+			if (resp.getStatus() == 0)
+			{
+				channelID = resp.getDataField()[0];
+			}
+			else
+			{
+				_ERR("status word [ %02X %02X ]", resp.getSW1(), resp.getSW2());
+
+				return channel;
+			}
+		}
+		else
+		{
+			_ERR("select apdu is failed, rv [%d], length [%d]", rv, result.size());
+
+			return channel;
+		}
+
+		/* select aid */
+		command = APDUHelper::generateAPDU(APDUHelper::COMMAND_SELECT_BY_DF_NAME, channelID, aid);
+		rv = terminal->transmitSync(command, result);
+
+		if (rv == 0 && result.size() >= 2)
+		{
+			ResponseHelper resp(result);
+
+			if (resp.getStatus() == 0)
+			{
+				channel = new ServerChannel(this, caller, channelID, terminal);
+				if (channel == NULL)
+				{
+					_ERR("alloc failed");
+
+					return NULL;
+				}
+
+				channel->selectResponse = result;
+
+				channels.push_back(channel);
+			}
+			else
+			{
+				_ERR("status word [ %02X %02X ]", resp.getSW1(), resp.getSW2());
+			}
+		}
+		else
+		{
+			_ERR("select apdu is failed, rv [%d], length [%d]", rv, result.size());
+		}
+#endif
 		return channel;
 	}
 
-	Channel *ServerSession::openLogicalChannelSync(unsigned char *aid, unsigned int length)
+	Channel *ServerSession::openLogicalChannelSync(const unsigned char *aid, unsigned int length)
 		throw(ErrorIO &, ErrorIllegalState &, ErrorIllegalParameter &, ErrorSecurity &)
 	{
-		return openLogicalChannelSync(ByteArray(aid, length), NULL);
+		unsigned char P2 = 0x00;
+		ByteArray temp(aid, length);
+
+		return openLogicalChannelSync(temp, P2);
 	}
 
-	Channel *ServerSession::openLogicalChannelSync(unsigned char *aid, unsigned int length, void *caller)
+	Channel *ServerSession::openLogicalChannelSync(const unsigned char *aid, unsigned int length, unsigned char P2)
 		throw(ErrorIO &, ErrorIllegalState &, ErrorIllegalParameter &, ErrorSecurity &)
 	{
-		return openLogicalChannelSync(ByteArray(aid, length), caller);
+		ByteArray temp(aid, length);
+
+		return openLogicalChannelSync(temp, P2);
+	}
+
+	Channel *ServerSession::openLogicalChannelSync(const unsigned char *aid, unsigned int length, void *caller)
+		throw(ErrorIO &, ErrorIllegalState &, ErrorIllegalParameter &, ErrorSecurity &)
+	{
+		ByteArray temp(aid, length);
+
+		return openLogicalChannelSync(temp, caller);
 	}
 
 } /* namespace smartcard_service_api */

@@ -14,40 +14,32 @@
  * limitations under the License.
  */
 
-/* standard library header */
+#ifndef GDBUSHELPER_H_
+#define GDBUSHELPER_H_
 
-/* SLP library header */
+#include <glib.h>
 
-/* local header */
-#include "Debug.h"
-#include "ProviderHelper.h"
+#include "ByteArray.h"
 
 namespace smartcard_service_api
 {
-//	ProviderHelper::ProviderHelper()
-//	{
-//	}
-
-	ProviderHelper::ProviderHelper(Channel *channel)
+	class CallbackParam
 	{
-		this->channel = NULL;
+	public :
+		void *instance;
+		void *callback;
+		void *user_param;
+	};
 
-		if (channel == NULL)
-		{
-			SCARD_DEBUG_ERR("invalid channel");
-			return;
-		}
-
-		this->channel = channel;
-	}
-
-	ProviderHelper::~ProviderHelper()
+	class GDBusHelper
 	{
-	}
+	public :
+		static void convertVariantToByteArray(GVariant *var,
+			ByteArray &array);
 
-	Channel *ProviderHelper::getChannel()
-	{
-		return channel;
-	}
-
+		static GVariant *convertByteArrayToVariant(
+			const ByteArray &array);
+	};
 } /* namespace smartcard_service_api */
+
+#endif /* GDBUSHELPER_H_ */

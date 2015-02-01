@@ -14,31 +14,52 @@
  * limitations under the License.
  */
 
-#ifndef SERVERDISPATCHER_H_
-#define SERVERDISPATCHER_H_
+#ifndef PKCS15CDF_H_
+#define PKCS15CDF_H_
 
 /* standard library header */
 
 /* SLP library header */
 
 /* local header */
-#include "DispatcherHelper.h"
+#include "PKCS15Object.h"
+#include "PKCS15OID.h"
 
 namespace smartcard_service_api
 {
-	class ServerIPC;
+	class CertificateType
+	{
+	public :
+		/* Common Object Attributes */
+		string label;
+		bool modifiable;
 
-	class ServerDispatcher: public DispatcherHelper
+		/* Common Certificate Attributes */
+		ByteArray id;
+		int authority;
+
+		/* Certificate Attributes */
+		ByteArray path;
+		int index;
+		size_t length;
+		ByteArray certificate;
+	};
+
+	class PKCS15CDF : public PKCS15Object
 	{
 	private:
-		ServerDispatcher();
-		~ServerDispatcher();
+		vector<CertificateType *> listCertType;
 
-		void *dispatcherThreadFunc(DispatcherMsg *msg, void *data);
+		bool parseData(const ByteArray &data);
 
 	public:
-		static ServerDispatcher *getInstance();
+		PKCS15CDF(unsigned int fid, Channel *channel);
+		PKCS15CDF(const ByteArray &path, Channel *channel);
+		~PKCS15CDF();
+
+		inline size_t getCount() const { return listCertType.size(); }
+		const CertificateType *getCertificateType(int index) const;
 	};
 
 } /* namespace smartcard_service_api */
-#endif /* SERVERDISPATCHER_H_ */
+#endif /* PKCS15DODF_H_ */

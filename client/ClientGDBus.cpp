@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012 Samsung Electronics Co., Ltd All Rights Reserved
+ * Copyright (c) 2012, 2013 Samsung Electronics Co., Ltd.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,17 +15,28 @@
  */
 
 /* standard library header */
+#include <glib.h>
 
 /* SLP library header */
 
 /* local header */
-#include "ReaderHelper.h"
+#include "smartcard-types.h"
+#include "Debug.h"
+#include "ByteArray.h"
+#include "ClientGDBus.h"
+
+using namespace std;
+
+/* below functions will be called when dlopen or dlclose is called */
+void __attribute__ ((constructor)) lib_init()
+{
+	g_type_init();
+}
+
+void __attribute__ ((destructor)) lib_fini()
+{
+}
 
 namespace smartcard_service_api
 {
-	SessionHelper::SessionHelper(ReaderHelper *reader) :
-		closed(true)
-	{
-		this->reader = reader;
-	}
 } /* namespace smartcard_service_api */

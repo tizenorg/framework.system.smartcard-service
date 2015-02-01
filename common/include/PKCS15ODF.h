@@ -24,35 +24,33 @@
 
 /* local header */
 #include "FileObject.h"
+#include "PKCS15CDF.h"
 #include "PKCS15DODF.h"
 
 using namespace std;
 
 namespace smartcard_service_api
 {
-	class PKCS15ODF: public PKCS15Object
+	class PKCS15ODF : public PKCS15Object
 	{
 	private:
-		bool parseData(ByteArray data);
+		PKCS15CDF *cdf;
 		PKCS15DODF *dodf;
 
+		bool parseData(const ByteArray &data);
+
 	public:
-		static const unsigned int ODF_FID = 0x3150;
-
-		static const unsigned int TAG_DODF = (unsigned int)0xA7;
-		static const unsigned int TAG_TOKENINFO = (unsigned int)0xA5;
-
-//		PKCS15ODF();
 		PKCS15ODF(Channel *channel);
-		PKCS15ODF(Channel *channel, ByteArray selectResponse);
+		PKCS15ODF(Channel *channel, const ByteArray &selectResponse);
 		~PKCS15ODF();
 
 		int getPuKDFPath(ByteArray &path);
 		int getPrKDFPath(ByteArray &path);
 		int getAODFPath(ByteArray &path);
-		int getCDFFPath(ByteArray &path);
+		int getCDFPath(ByteArray &path);
 		int getDODFPath(ByteArray &path);
 
+		PKCS15CDF *getCDF();
 		PKCS15DODF *getDODF();
 	};
 

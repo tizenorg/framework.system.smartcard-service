@@ -14,51 +14,39 @@
  * limitations under the License.
  */
 
-#ifndef DISPATCHERHELPER_H_
-#define DISPATCHERHELPER_H_
+#ifndef GPARFACL_H_
+#define GPARFACL_H_
 
 /* standard library header */
-#include <queue>
-#include <pthread.h>
 
 /* SLP library header */
 
 /* local header */
-#include "Synchronous.h"
-#include "DispatcherMsg.h"
+#include "smartcard-types.h"
+#ifdef __cplusplus
+#include "AccessControlList.h"
+#include "PKCS15.h"
+#endif /* __cplusplus */
 
-using namespace std;
-
+#ifdef __cplusplus
 namespace smartcard_service_api
 {
-	class DispatcherHelper : public Synchronous
+	class GPARFACL : public AccessControlList
 	{
 	private:
-		pthread_t dispatcherThread;
+		ByteArray refreshTag;
 
-		queue<DispatcherMsg *> messageQ;
-
-		static void *_dispatcherThreadFunc(void *data);
-
-		DispatcherMsg *fetchMessage();
-
-	protected:
-		virtual void *dispatcherThreadFunc(DispatcherMsg *msg, void *data) = 0;
+		int loadAccessControl(Channel *channel, PKCS15DODF *dodf);
+		int loadRules(Channel *channel, const ByteArray &path);
+		int loadAccessConditions(Channel *channel, const ByteArray &aid, const ByteArray &path);
 
 	public:
-		DispatcherHelper();
-		~DispatcherHelper();
+		GPARFACL();
+		~GPARFACL();
 
-		void clearQueue();
-
-		void pushMessage(DispatcherMsg *msg);
-		void processMessage(DispatcherMsg *msg);
-
-		bool runDispatcherThread();
-		void stopDispatcherThread();
-
-		friend void *_dispatcherThreadFunc(void *data);
+		int loadACL(Channel *channel);
 	};
 
 } /* namespace smartcard_service_api */
-#endif /* DISPATCHERHELPER_H_ */
+#endif /* __cplusplus */
+#endif /* GPARFACL_H_ */

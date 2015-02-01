@@ -26,10 +26,9 @@
 
 /* local header */
 #include "Debug.h"
-#include "Message.h"
 #include "TerminalInterface.h"
-#include "ServerSEService.h"
 #include "ServerResource.h"
+#include "ServerSEService.h"
 
 namespace smartcard_service_api
 {
@@ -62,16 +61,16 @@ namespace smartcard_service_api
 			terminal = (Terminal *)createInstance();
 			if (terminal != NULL)
 			{
-				SCARD_DEBUG("terminal [%p]", terminal);
+				_DBG("terminal [%p]", terminal);
 			}
 			else
 			{
-				SCARD_DEBUG_ERR("terminal is null");
+				_ERR("terminal is null");
 			}
 		}
 		else
 		{
-			SCARD_DEBUG_ERR("create_instance is null [%d]", errno);
+			_ERR("create_instance is null [%d]", errno);
 		}
 
 		return terminal;
@@ -90,11 +89,11 @@ namespace smartcard_service_api
 			terminal = createInstance(libHandle);
 			if (terminal != NULL)
 			{
-				SCARD_DEBUG("SE info : [%s] [%s]", library, terminal->getName());
+				_DBG("SE info : [%s] [%s]", library, terminal->getName());
 
 				libraries.push_back(libHandle);
 
-				pair<char *, Terminal *> newPair(terminal->getName(), terminal);
+				pair<string, Terminal *> newPair(terminal->getName(), terminal);
 				mapTerminals.insert(newPair);
 
 				if (terminal->isSecureElementPresence() == true)
@@ -102,33 +101,33 @@ namespace smartcard_service_api
 					ServerReader *reader = new ServerReader(this, terminal->getName(), terminal);
 					if (reader != NULL)
 					{
-						SCARD_DEBUG("register success [%s]", terminal->getName());
+						_DBG("register success [%s]", terminal->getName());
 
 						readers.push_back(reader);
 					}
 					else
 					{
-						SCARD_DEBUG_ERR("ServerReader alloc failed [%s]", terminal->getName());
+						_ERR("ServerReader alloc failed [%s]", terminal->getName());
 						/* throw exception */
 					}
 				}
 				else
 				{
-					SCARD_DEBUG("SE is not ready [%s]", terminal->getName());
+					_DBG("SE is not ready [%s]", terminal->getName());
 				}
 
 				result = true;
 			}
 			else
 			{
-				SCARD_DEBUG_ERR("createInstance failed [%s]", library);
+				_ERR("createInstance failed [%s]", library);
 
 				dlclose(libHandle);
 			}
 		}
 		else
 		{
-			SCARD_DEBUG_ERR("it is not se file [%s] [%d]", library, errno);
+			_ERR("it is not se file [%s] [%d]", library, errno);
 		}
 
 		return result;
@@ -137,7 +136,6 @@ namespace smartcard_service_api
 	int ServerSEService::openSELibraries()
 	{
 		int result;
-		void *libHandle;
 		DIR *dir = NULL;
 		struct dirent *entry = NULL;
 
@@ -151,11 +149,10 @@ namespace smartcard_service_api
 
 					/* need additional name rule :) */
 					/* open each files */
-					libHandle = NULL;
 
 					snprintf(fullPath, sizeof(fullPath), "%s/%s", OMAPI_SE_PATH, entry->d_name);
 
-					SCARD_DEBUG("se name [%s]", fullPath);
+					SECURE_LOGD("se name [%s]", fullPath);
 
 					result = appendSELibrary(fullPath);
 				}
@@ -187,67 +184,59 @@ namespace smartcard_service_api
 		}
 	}
 
-	bool ServerSEService::dispatcherCallback(void *message, int socket)
+#if 0
+	bool ServerSEService::isValidReaderHandle(void *handle)
 	{
-		int count;
-		ByteArray info;
-		Message *msg = (Message *)message;
-		Message response(*msg);
-		ServerResource &resource = ServerResource::getInstance();
+		bool result = false;
+		size_t i;
 
-		if (resource.createService(socket, msg->error) != NULL)
+		for (i = 0; i < readers.size(); i++)
 		{
-			SCARD_DEBUG_ERR("client added : pid [%d]", msg->error);
-
-			response.error = SCARD_ERROR_OK;
-
-			if ((count = resource.getReadersInformation(info)) > 0)
+			if ((void *)readers[i] == handle)
 			{
-				response.param1 = count;
-				response.data = info;
-			}
-			else
-			{
-				SCARD_DEBUG("no secure elements");
-				response.param1 = 0;
+				result =  true;
+				break;
 			}
 		}
-		else
-		{
-			SCARD_DEBUG_ERR("createClient failed");
-
-			response.error = SCARD_ERROR_OUT_OF_MEMORY;
-		}
-
-		/* response to client */
-		ServerIPC::getInstance()->sendMessage(socket, &response);
 
 		return false;
 	}
+#endif
 
-	void ServerSEService::terminalCallback(void *terminal, int event, int error, void *user_param)
+	void ServerSEService::terminalCallback(const void *terminal, int event, int error, void *user_param)
 	{
-		Message msg;
-//		Terminal *term = NULL;
-
 		switch (event)
 		{
 		case Terminal::NOTIFY_SE_AVAILABLE :
-			/* send all client to refresh reader */
-			msg.message = msg.MSG_NOTIFY_SE_INSERTED;
-			msg.data.setBuffer((unsigned char *)terminal,
-				strlen((char *)terminal) + 1);
-
-			ServerResource::getInstance().sendMessageToAllClients(msg);
+			{
+				/* add right se reader */
+//				if ((term = ServerResource::getInstance().getTerminal((char *)terminal)) != NULL)
+//				{
+//					_DBG("terminal : [%s]", (char *)terminal);
+//
+//					term->initialize();
+//				}
+//				else
+//				{
+//					_DBG("unknown terminal : [%s]", (char *)terminal);
+//				}
+			}
 			break;
 
 		case Terminal::NOTIFY_SE_NOT_AVAILABLE :
-			/* send all client to refresh reader */
-			msg.message = msg.MSG_NOTIFY_SE_REMOVED;
-			msg.data.setBuffer((unsigned char *)terminal,
-				strlen((char *)terminal) + 1);
-
-			ServerResource::getInstance().sendMessageToAllClients(msg);
+			{
+				/* remove right se reader */
+//				if ((term = ServerResource::getInstance().getTerminal((char *)terminal)) != NULL)
+//				{
+//					_DBG("terminal : [%s]", (char *)terminal);
+//
+//					term->finalize();
+//				}
+//				else
+//				{
+//					_DBG("unknown terminal : [%s]", (char *)terminal);
+//				}
+			}
 			break;
 
 		default :

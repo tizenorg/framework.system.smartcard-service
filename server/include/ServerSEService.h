@@ -35,7 +35,7 @@ namespace smartcard_service_api
 	{
 	private:
 		vector<void *> libraries;
-		map<char *, Terminal *> mapTerminals;
+		map<string, Terminal *> mapTerminals;
 
 		ServerSEService();
 		~ServerSEService();
@@ -46,15 +46,20 @@ namespace smartcard_service_api
 		int openSELibraries();
 		void closeSELibraries();
 
-		static void terminalCallback(void *terminal, int event, int error, void *user_param);
+		static void terminalCallback(const void *terminal, int event, int error, void *user_param);
 		static bool dispatcherCallback(void *message, int socket);
 
 	public:
 		static ServerSEService &getInstance();
 
+#if 0
+		bool isValidReaderHandle(void *handle);
+#endif
+
 		void shutdown() {}
 		void shutdownSync() {}
-		friend void terminalCallback(char *name, int event, int error, void *user_param);
+
+		friend void terminalCallback(const void *name, int event, int error, void *user_param);
 		friend bool dispatcherCallback(void *message, int socket);
 		friend class ServerDispatcher;
 	};

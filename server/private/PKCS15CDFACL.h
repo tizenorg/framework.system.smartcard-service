@@ -14,39 +14,35 @@
  * limitations under the License.
  */
 
-#ifndef CLIENTDISPATCHER_H_
-#define CLIENTDISPATCHER_H_
+#ifndef PKCS15CDFACL_H_
+#define PKCS15CDFACL_H_
 
 /* standard library header */
-#include <map>
 
 /* SLP library header */
 
 /* local header */
-#include "DispatcherHelper.h"
+#include "smartcard-types.h"
+#ifdef __cplusplus
+#include "AccessControlList.h"
+#include "PKCS15.h"
+#endif /* __cplusplus */
 
-using namespace std;
-
+#ifdef __cplusplus
 namespace smartcard_service_api
 {
-	class SEService;
-
-	class ClientDispatcher: public DispatcherHelper
+	class PKCS15CDFACL : public AccessControlList
 	{
 	private:
-		map<void *, SEService *> mapSESerivces;
-
-		ClientDispatcher();
-		~ClientDispatcher();
-
-		void *dispatcherThreadFunc(DispatcherMsg *msg, void *data);
+		int loadRules(Channel *channel, PKCS15CDF *cdf);
 
 	public:
-		static ClientDispatcher &getInstance();
+		PKCS15CDFACL();
+		~PKCS15CDFACL();
 
-		bool addSEService(void *context, SEService *service);
-		void removeSEService(void *context);
+		int loadACL(Channel *channel);
 	};
 
-} /* namespace open_mobile_api */
-#endif /* CLIENTDISPATCHER_H_ */
+} /* namespace smartcard_service_api */
+#endif /* __cplusplus */
+#endif /* PKCS15CDFACL_H_ */

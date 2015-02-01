@@ -20,61 +20,43 @@
 /* standard library header */
 #include <map>
 #include <vector>
-#include <glib.h>
+#include <string>
 
 /* SLP library header */
 
 /* local header */
-#include "Message.h"
 #include "ServiceInstance.h"
 
 namespace smartcard_service_api
 {
 	class ClientInstance
 	{
-	private:
-		void *ioChannel;
-		int socket;
-		int watchID;
-		int state;
-		int pid;
+	private :
+		string name;
+		pid_t pid;
 		vector<ByteArray> certHashes;
 		map<unsigned int, ServiceInstance *> mapServices;
 
-		static gboolean _getCertificationHashes(gpointer user_data);
-
-	public:
-		ClientInstance(void *ioChannel, int socket, int watchID, int state, int pid)
+	public :
+		ClientInstance(const char *name, pid_t pid) :
+			name(name), pid(pid)
 		{
-			this->ioChannel = ioChannel;
-			this->socket = socket;
-			this->watchID = watchID;
-			this->state = state;
-			this->pid = pid;
 		}
-		~ClientInstance() { removeServices(); }
+		inline ~ClientInstance() { removeServices(); }
+		inline bool operator ==(const char *name) const { return (this->name.compare(name) == 0); }
 
-		inline bool operator ==(const int &socket) const { return (this->socket == socket); }
+		inline void setPID(int pid) { this->pid = pid; }
+		inline int getPID() const { return pid; }
 
-		inline void *getIOChannel() { return ioChannel; }
-		inline int getSocket() { return socket; }
-		inline int getWatchID() { return watchID; }
-		inline int getState() { return state; }
-
-		void setPID(int pid);
-		inline int getPID() { return pid; }
-
-		ServiceInstance *createService(unsigned int context);
-		ServiceInstance *getService(unsigned int context);
-		void removeService(unsigned int context);
+		ServiceInstance *createService();
+		ServiceInstance *getService(unsigned int handle);
+		void removeService(unsigned int handle);
 		void removeServices();
-
-		bool sendMessageToAllServices(int socket, Message &msg);
+		inline size_t getServiceCounts() const { return mapServices.size(); }
 		void generateCertificationHashes();
 
 		inline vector<ByteArray> &getCertificationHashes() { return certHashes; }
-
-		friend gboolean _getCertificationHashes(gpointer user_data);
 	};
 } /* namespace smartcard_service_api */
+
 #endif /* CLIENTINSTANCE_H_ */

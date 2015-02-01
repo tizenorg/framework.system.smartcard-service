@@ -27,7 +27,7 @@
 #include "Session.h"
 #include "Reader.h"
 #include "ClientChannel.h"
-#include "ClientIPC.h"
+#include "ClientGDBus.h"
 
 #ifndef EXTERN_API
 #define EXTERN_API __attribute__((visibility("default")))
@@ -42,13 +42,29 @@ namespace smartcard_service_api
 
 		if (context == NULL || handle == NULL)
 		{
-			SCARD_DEBUG_ERR("handle is null");
+			_ERR("handle is null");
 
 			return;
 		}
 
 		this->context = context;
 		this->handle = handle;
+
+		/* init default context */
+		GError *error = NULL;
+
+		proxy = smartcard_service_session_proxy_new_for_bus_sync(
+			G_BUS_TYPE_SYSTEM, G_DBUS_PROXY_FLAGS_NONE,
+			"org.tizen.SmartcardService",
+			"/org/tizen/SmartcardService/Session",
+			NULL, &error);
+		if (proxy == NULL)
+		{
+			_ERR("Can not create proxy : %s", error->message);
+			g_error_free(error);
+			return;
+		}
+
 		closed = false;
 	}
 
@@ -76,55 +92,195 @@ namespace smartcard_service_api
 		}
 	}
 
-	ByteArray Session::getATRSync()
+	void Session::session_get_atr_cb(GObject *source_object,
+		GAsyncResult *res, gpointer user_data)
+	{
+		CallbackParam *param = (CallbackParam *)user_data;
+		Session *session;
+		getATRCallback callback;
+		gint result;
+		GVariant *var_atr;
+		GError *error = NULL;
+		ByteArray atr;
+
+		_INFO("MSG_REQUEST_GET_ATR");
+
+		if (param == NULL) {
+			_ERR("null parameter!!!");
+			return;
+		}
+
+		session = (Session *)param->instance;
+		callback = (getATRCallback)param->callback;
+
+		if (smartcard_service_session_call_get_atr_finish(
+			SMARTCARD_SERVICE_SESSION(source_object),
+			&result, &var_atr, res, &error) == true) {
+			if (result == SCARD_ERROR_OK) {
+				GDBusHelper::convertVariantToByteArray(var_atr, atr);
+
+				session->atr = atr;
+			} else {
+				_ERR("smartcard_service_session_call_get_atr failed, [%d]", result);
+			}
+		} else {
+			_ERR("smartcard_service_session_call_get_atr failed, [%s]", error->message);
+			g_error_free(error);
+
+			result = SCARD_ERROR_IPC_FAILED;
+		}
+
+		if (callback != NULL) {
+			callback(atr.getBuffer(),
+				atr.size(), result, param->user_param);
+		}
+
+		delete param;
+	}
+
+	void Session::session_open_channel_cb(GObject *source_object,
+		GAsyncResult *res, gpointer user_data)
+	{
+		CallbackParam *param = (CallbackParam *)user_data;
+		Session *session;
+		openChannelCallback callback;
+		gint result = SCARD_ERROR_UNKNOWN;
+		gint channel_number;
+		guint channel_id;
+		GVariant *var_response;
+		GError *error = NULL;
+		Channel *channel = NULL;
+
+		_INFO("MSG_REQUEST_OPEN_CHANNEL");
+
+		if (param == NULL) {
+			_ERR("null parameter!!!");
+			return;
+		}
+
+		session = (Session *)param->instance;
+		callback = (openChannelCallback)param->callback;
+
+		if (smartcard_service_session_call_open_channel_finish(
+			SMARTCARD_SERVICE_SESSION(source_object),
+			&result, &channel_id, &channel_number, &var_response,
+			res, &error) == true) {
+			if (result == SCARD_ERROR_OK) {
+				ByteArray response;
+
+				GDBusHelper::convertVariantToByteArray(
+					var_response, response);
+
+				/* create new instance of channel */
+				channel = new ClientChannel(session->context,
+					session, channel_id,
+					response, (void *)channel_id);
+				if (channel != NULL) {
+					session->channels.push_back(channel);
+				} else {
+					_ERR("alloc failed");
+
+					result = SCARD_ERROR_OUT_OF_MEMORY;
+				}
+			} else {
+				_ERR("smartcard_service_session_call_open_channel failed, [%d]", result);
+			}
+		} else {
+			_ERR("smartcard_service_session_call_open_channel failed, [%s]", error->message);
+			g_error_free(error);
+
+			result = SCARD_ERROR_IPC_FAILED;
+		}
+
+		if (callback != NULL) {
+			callback(channel, result, param->user_param);
+		}
+
+		delete param;
+	}
+
+	void Session::session_close_cb(GObject *source_object,
+		GAsyncResult *res, gpointer user_data)
+	{
+		CallbackParam *param = (CallbackParam *)user_data;
+		Session *session;
+		closeSessionCallback callback;
+		gint result;
+		GError *error = NULL;
+
+		_INFO("MSG_REQUEST_CLOSE_SESSION");
+
+		if (param == NULL) {
+			_ERR("null parameter!!!");
+			return;
+		}
+
+		session = (Session *)param->instance;
+		callback = (closeSessionCallback)param->callback;
+
+		if (smartcard_service_session_call_close_session_finish(
+			SMARTCARD_SERVICE_SESSION(source_object),
+			&result, res, &error) == true) {
+			if (result == SCARD_ERROR_OK) {
+				session->closed = true;
+			} else {
+				_ERR("smartcard_service_session_call_close_session failed, [%d]", result);
+			}
+		} else {
+			_ERR("smartcard_service_session_call_close_session failed, [%s]", error->message);
+			g_error_free(error);
+
+			result = SCARD_ERROR_IPC_FAILED;
+		}
+
+		if (callback != NULL) {
+			callback(result, param->user_param);
+		}
+
+		delete param;
+	}
+
+	const ByteArray Session::getATRSync()
 		throw (ExceptionBase &, ErrorIO &, ErrorSecurity &,
 			ErrorIllegalState &, ErrorIllegalParameter &)
 	{
 		ByteArray result;
+
 		if (getReader()->isSecureElementPresent() == true)
 		{
 			if (atr.isEmpty() == true)
 			{
-				Message msg;
-				int rv;
+				gint ret;
+				GVariant *var_atr = NULL;
+				GError *error = NULL;
 
-#ifdef CLIENT_IPC_THREAD
-				/* request channel handle from server */
-				msg.message = Message::MSG_REQUEST_GET_ATR;
-				msg.param1 = (unsigned long)handle;
-				msg.error = (unsigned long)context; /* using error to context */
-				msg.caller = (void *)this;
-				msg.callback = (void *)this; /* if callback is class instance, it means synchronized call */
+				if (smartcard_service_session_call_get_atr_sync(
+					(SmartcardServiceSession *)proxy,
+					GPOINTER_TO_UINT(context),
+					GPOINTER_TO_UINT(handle),
+					&ret, &var_atr, NULL, &error) == true) {
+					if (ret == SCARD_ERROR_OK) {
+						GDBusHelper::convertVariantToByteArray(var_atr, result);
 
-				syncLock();
-				if (ClientIPC::getInstance().sendMessage(&msg) == true)
-				{
-					rv = waitTimedCondition(0);
-					if (rv != 0)
-					{
-						SCARD_DEBUG_ERR("time over");
-						this->error = SCARD_ERROR_OPERATION_TIMEOUT;
+						atr = result;
+					} else {
+						_ERR("smartcard_service_session_call_get_atr_sync failed, [%d]", ret);
+
+						THROW_ERROR(ret);
 					}
-				}
-				else
-				{
-					SCARD_DEBUG_ERR("sendMessage failed");
-					this->error = SCARD_ERROR_IPC_FAILED;
-				}
-				syncUnlock();
+				} else {
+					_ERR("smartcard_service_session_call_get_atr_sync failed, [%s]", error->message);
+					g_error_free(error);
 
-				if (this->error != SCARD_ERROR_OK)
-				{
-					ThrowError::throwError(this->error);
+					THROW_ERROR(SCARD_ERROR_IPC_FAILED);
 				}
-#endif
 			}
 
 			result = atr;
 		}
 		else
 		{
-			SCARD_DEBUG_ERR("unavailable session");
+			_ERR("unavailable session");
 			throw ErrorIllegalState(SCARD_ERROR_UNAVAILABLE);
 		}
 
@@ -139,37 +295,32 @@ namespace smartcard_service_api
 		{
 			if (atr.isEmpty() == true)
 			{
-				Message msg;
+				CallbackParam *param = new CallbackParam();
 
+				param->instance = this;
+				param->callback = (void *)callback;
+				param->user_param = userData;
 
-			/* request channel handle from server */
-				msg.message = Message::MSG_REQUEST_GET_ATR;
-				msg.param1 = (unsigned long)handle;
-				msg.error = (unsigned long)context; /* using error to context */
-				msg.caller = (void *)this;
-				msg.callback = (void *)callback;
-				msg.userParam = userData;
+				smartcard_service_session_call_get_atr(
+					(SmartcardServiceSession *)proxy,
+					GPOINTER_TO_UINT(context),
+					GPOINTER_TO_UINT(handle), NULL,
+					&Session::session_get_atr_cb, param);
 
-				if (ClientIPC::getInstance().sendMessage(&msg) == true)
-				{
-					result = SCARD_ERROR_OK;
-				}
-				else
-				{
-					result = SCARD_ERROR_IPC_FAILED;
-				}
+				result = SCARD_ERROR_OK;
 			}
 			else
 			{
 				result = SCARD_ERROR_OK;
 
 				/* TODO : invoke callback directly */
-				callback(atr.getBuffer(), atr.getLength(), 0, userData);
+				callback(atr.getBuffer(),
+					atr.size(), 0, userData);
 			}
 		}
 		else
 		{
-			SCARD_DEBUG_ERR("unavailable session");
+			_ERR("unavailable session");
 			result = SCARD_ERROR_ILLEGAL_STATE;
 		}
 
@@ -180,436 +331,269 @@ namespace smartcard_service_api
 		throw (ExceptionBase &, ErrorIO &, ErrorSecurity &,
 			ErrorIllegalState &, ErrorIllegalParameter &)
 	{
-		Message msg;
-		int rv;
-
-#ifdef CLIENT_IPC_THREAD
 		if (isClosed() == false)
 		{
 			closed = true;
 			closeChannels();
 
-			/* request channel handle from server */
-			msg.message = Message::MSG_REQUEST_CLOSE_SESSION;
-			msg.param1 = (unsigned long)handle;
-			msg.error = (unsigned long)context; /* using error to context */
-			msg.caller = (void *)this;
-			msg.callback = (void *)this; /* if callback is class instance, it means synchronized call */
+			gint ret;
+			GError *error = NULL;
 
-			syncLock();
-			if (ClientIPC::getInstance().sendMessage(&msg) == true)
-			{
-				rv = waitTimedCondition(0);
+			if (smartcard_service_session_call_close_session_sync(
+				(SmartcardServiceSession *)proxy,
+				GPOINTER_TO_UINT(context),
+				GPOINTER_TO_UINT(handle),
+				&ret, NULL, &error) == true) {
+				if (ret == SCARD_ERROR_OK) {
+					closed = true;
+				} else {
+					_ERR("smartcard_service_session_call_close_session_sync failed, [%d]", ret);
 
-				if (rv != 0)
-				{
-					SCARD_DEBUG_ERR("time over");
-					this->error = SCARD_ERROR_OPERATION_TIMEOUT;
+					THROW_ERROR(ret);
 				}
-			}
-			else
-			{
-				SCARD_DEBUG_ERR("sendMessage failed");
-				this->error = SCARD_ERROR_IPC_FAILED;
-			}
-			syncUnlock();
+			} else {
+				_ERR("smartcard_service_session_call_get_atr_sync failed, [%s]", error->message);
+				g_error_free(error);
 
-			if (this->error != SCARD_ERROR_OK)
-			{
-				ThrowError::throwError(this->error);
+				THROW_ERROR(SCARD_ERROR_IPC_FAILED);
 			}
 		}
-#endif
 	}
 
 	int Session::close(closeSessionCallback callback, void *userData)
 	{
 		int result = SCARD_ERROR_OK;
-		Message msg;
 
 		if (isClosed() == false)
 		{
 			closed = true;
 			closeChannels();
 
-			/* request channel handle from server */
-			msg.message = Message::MSG_REQUEST_CLOSE_SESSION;
-			msg.param1 = (unsigned long)handle;
-			msg.error = (unsigned long)context; /* using error to context */
-			msg.caller = (void *)this;
-			msg.callback = (void *)callback;
-			msg.userParam = userData;
+			CallbackParam *param = new CallbackParam();
 
-			if (ClientIPC::getInstance().sendMessage(&msg) == false)
-			{
-				result = SCARD_ERROR_IPC_FAILED;
-			}
+			param->instance = this;
+			param->callback = (void *)callback;
+			param->user_param = userData;
+
+			smartcard_service_session_call_close_session(
+				(SmartcardServiceSession *)proxy,
+				GPOINTER_TO_UINT(context),
+				GPOINTER_TO_UINT(handle), NULL,
+				&Session::session_close_cb, param);
 		}
 
 		return result;
 	}
 
-	unsigned int Session::getChannelCountSync()
+	size_t Session::getChannelCount() const
 	{
-		channelCount = -1;
+		size_t count = 0;
 
 		if (getReader()->isSecureElementPresent() == true)
 		{
-			Message msg;
-			int rv;
-
-
-#ifdef CLIENT_IPC_THREAD
-			/* request channel handle from server */
-			msg.message = Message::MSG_REQUEST_GET_CHANNEL_COUNT;
-			msg.param1 = (unsigned long)handle;
-			msg.error = (unsigned long)context; /* using error to context */
-			msg.caller = (void *)this;
-			msg.callback = (void *)this; /* if callback is class instance, it means synchronized call */
-
-			channelCount = -1;
-
-			syncLock();
-			if (ClientIPC::getInstance().sendMessage(&msg) == true)
-			{
-				rv = waitTimedCondition(0);
-				if (rv != 0)
-				{
-					SCARD_DEBUG_ERR("time over");
-					this->error = SCARD_ERROR_OPERATION_TIMEOUT;
-				}
-			}
-			else
-			{
-				SCARD_DEBUG_ERR("sendMessage failed");
-				this->error = SCARD_ERROR_IPC_FAILED;
-			}
-			syncUnlock();
-
-			if (this->error != SCARD_ERROR_OK)
-			{
-				ThrowError::throwError(this->error);
-			}
-#endif
+			count = channels.size();
 		}
 		else
 		{
-			SCARD_DEBUG_ERR("unavailable session");
+			_ERR("unavailable session");
 			throw ErrorIllegalState(SCARD_ERROR_UNAVAILABLE);
 		}
 
-		return channelCount;
+		return count;
 	}
-
-	int Session::getChannelCount(getChannelCountCallback callback, void *userData)
-	{
-		int result;
-
-		if (getReader()->isSecureElementPresent() == true)
-		{
-			Message msg;
-
-
-			msg.message = Message::MSG_REQUEST_GET_CHANNEL_COUNT;
-			msg.param1 = (unsigned long)handle;
-			msg.error = (unsigned long)context; /* using error to context */
-			msg.caller = (void *)this;
-			msg.callback = (void *)callback;
-			msg.userParam = userData;
-
-			if (ClientIPC::getInstance().sendMessage(&msg) == true)
-			{
-				result = SCARD_ERROR_OK;
-			}
-			else
-			{
-				result = SCARD_ERROR_IPC_FAILED;
-			}
-		}
-		else
-		{
-			SCARD_DEBUG_ERR("unavailable session");
-			result = SCARD_ERROR_ILLEGAL_STATE;
-		}
-
-		return result;
-	}
-
-	Channel *Session::openChannelSync(int id, ByteArray aid)
+	Channel *Session::openChannelSync(int id, const ByteArray &aid)
 		throw (ExceptionBase &, ErrorIO &, ErrorIllegalState &,
 			ErrorIllegalParameter &, ErrorSecurity &)
 	{
-		openedChannel = NULL;
+		return openChannelSync(id, aid, 0x00);
+	}
+
+	Channel *Session::openChannelSync(int id, const ByteArray &aid, unsigned char P2)
+		throw (ExceptionBase &, ErrorIO &, ErrorIllegalState &,
+			ErrorIllegalParameter &, ErrorSecurity &)
+	{
+		Channel *channel = NULL;
 
 		if (getReader()->isSecureElementPresent() == true)
 		{
-			Message msg;
-			int rv;
+			gint ret;
+			GVariant *var_aid = NULL, *var_response = NULL;
+			guint channel_id;
+			gint channel_number;
+			GError *error = NULL;
 
-#ifdef CLIENT_IPC_THREAD
-			/* request channel handle from server */
-			msg.message = Message::MSG_REQUEST_OPEN_CHANNEL;
-			msg.param1 = id;
-			msg.param2 = (unsigned long)handle;
-			msg.data = aid;
-			msg.error = (unsigned long)context; /* using error to context */
-			msg.caller = (void *)this;
-			msg.callback = (void *)this; /* if callback is class instance, it means synchronized call */
+			var_aid = GDBusHelper::convertByteArrayToVariant(aid);
 
-			syncLock();
-			if (ClientIPC::getInstance().sendMessage(&msg) == true)
-			{
-				rv = waitTimedCondition(0);
-				if (rv != 0)
-				{
-					SCARD_DEBUG_ERR("time over");
-					this->error = SCARD_ERROR_OPERATION_TIMEOUT;
+			if (smartcard_service_session_call_open_channel_sync(
+				(SmartcardServiceSession *)proxy,
+				GPOINTER_TO_UINT(context),
+				GPOINTER_TO_UINT(handle),
+				(guint)id, var_aid, (guint8)P2, &ret, &channel_id, &channel_number,
+				&var_response, NULL, &error) == true) {
+				if (ret == SCARD_ERROR_OK && channel_id != 0) {
+					ByteArray response;
+
+					GDBusHelper::convertVariantToByteArray(
+						var_response, response);
+
+					/* create new instance of channel */
+					channel = new ClientChannel(context,
+						this, channel_number,
+						response, (void *)channel_id);
+					if (channel != NULL)
+					{
+						channels.push_back(channel);
+					}
+					else
+					{
+						_ERR("alloc failed");
+
+						THROW_ERROR(SCARD_ERROR_OUT_OF_MEMORY);
+					}
+				} else {
+					_ERR("smartcard_service_session_call_open_channel_sync failed, [%d]", ret);
+
+					THROW_ERROR(ret);
 				}
-			}
-			else
-			{
-				SCARD_DEBUG_ERR("sendMessage failed");
-				this->error = SCARD_ERROR_IPC_FAILED;
-			}
-			syncUnlock();
-#endif
-			if (this->error != SCARD_ERROR_OK)
-			{
-				ThrowError::throwError(this->error);
+			} else {
+				_ERR("smartcard_service_session_call_open_channel_sync failed, [%s]", error->message);
+				g_error_free(error);
+
+				THROW_ERROR(SCARD_ERROR_IPC_FAILED);
 			}
 		}
 		else
 		{
-			SCARD_DEBUG_ERR("unavailable session");
+			_ERR("unavailable session");
+
 			throw ErrorIllegalState(SCARD_ERROR_UNAVAILABLE);
 		}
 
-		return (Channel *)openedChannel;
+		return (Channel *)channel;
 	}
 
-	int Session::openChannel(int id, ByteArray aid, openChannelCallback callback, void *userData)
+	int Session::openChannel(int id, const ByteArray &aid, openChannelCallback callback, void *userData)
 	{
 		int result;
 
 		if (getReader()->isSecureElementPresent() == true)
 		{
-			Message msg;
+			GVariant *var_aid;
 
-			/* request channel handle from server */
-			msg.message = Message::MSG_REQUEST_OPEN_CHANNEL;
-			msg.param1 = id;
-			msg.param2 = (unsigned long)handle;
-			msg.data = aid;
-			msg.error = (unsigned long)context; /* using error to context */
-			msg.caller = (void *)this;
-			msg.callback = (void *)callback;
-			msg.userParam = userData;
+			CallbackParam *param = new CallbackParam();
 
-			if (ClientIPC::getInstance().sendMessage(&msg) == true)
-			{
-				result = SCARD_ERROR_OK;
-			}
-			else
-			{
-				result = SCARD_ERROR_IPC_FAILED;
-			}
+			param->instance = this;
+			param->callback = (void *)callback;
+			param->user_param = userData;
+
+			var_aid = GDBusHelper::convertByteArrayToVariant(aid);
+
+			smartcard_service_session_call_open_channel(
+				(SmartcardServiceSession *)proxy,
+				GPOINTER_TO_UINT(context),
+				GPOINTER_TO_UINT(handle),
+				(guint)id, var_aid, 0, NULL,
+				&Session::session_open_channel_cb, param);
+
+			result = SCARD_ERROR_OK;
 		}
 		else
 		{
-			SCARD_DEBUG_ERR("unavailable session");
+			_ERR("unavailable session");
 			result = SCARD_ERROR_ILLEGAL_STATE;
 		}
 
 		return result;
 	}
 
-	Channel *Session::openBasicChannelSync(ByteArray aid)
-		throw (ErrorIO &, ErrorIllegalState &, ErrorIllegalParameter &, ErrorSecurity &)
+	Channel *Session::openBasicChannelSync(const ByteArray &aid)
+		throw (ExceptionBase &, ErrorIO &, ErrorIllegalState &,
+			ErrorIllegalParameter &, ErrorSecurity &)
 	{
-		return openChannelSync(0, aid);
+		return openChannelSync(0, aid, 0x00);
 	}
 
-	Channel *Session::openBasicChannelSync(unsigned char *aid, unsigned int length)
-		throw (ErrorIO &, ErrorIllegalState &, ErrorIllegalParameter &, ErrorSecurity &)
+	Channel *Session::openBasicChannelSync(const ByteArray &aid, unsigned char P2)
+		throw (ExceptionBase &, ErrorIO &, ErrorIllegalState &,
+			ErrorIllegalParameter &, ErrorSecurity &)
 	{
-		return openBasicChannelSync(ByteArray(aid, length));
+		return openChannelSync(0, aid, P2);
 	}
 
-	int Session::openBasicChannel(ByteArray aid, openChannelCallback callback, void *userData)
+	Channel *Session::openBasicChannelSync(const unsigned char *aid, unsigned int length)
+		throw (ExceptionBase &, ErrorIO &, ErrorIllegalState &,
+			ErrorIllegalParameter &, ErrorSecurity &)
+	{
+		ByteArray temp(aid, length);
+
+		return openBasicChannelSync(temp, 0x00);
+	}
+
+	Channel *Session::openBasicChannelSync(const unsigned char *aid, unsigned int length, unsigned char P2)
+		throw (ExceptionBase &, ErrorIO &, ErrorIllegalState &,
+			ErrorIllegalParameter &, ErrorSecurity &)
+	{
+		ByteArray temp(aid, length);
+
+		return openBasicChannelSync(temp, P2);
+	}
+
+	int Session::openBasicChannel(const ByteArray &aid, openChannelCallback callback, void *userData)
 	{
 		return openChannel(0, aid, callback, userData);
 	}
 
-	int Session::openBasicChannel(unsigned char *aid, unsigned int length,
+	int Session::openBasicChannel(const unsigned char *aid, unsigned int length,
 		openChannelCallback callback, void *userData)
 	{
-		return openBasicChannel(ByteArray(aid, length), callback, userData);
+		ByteArray temp(aid, length);
+
+		return openBasicChannel(temp, callback, userData);
 	}
 
-	Channel *Session::openLogicalChannelSync(ByteArray aid)
-		throw (ErrorIO &, ErrorIllegalState &, ErrorIllegalParameter &, ErrorSecurity &)
+	Channel *Session::openLogicalChannelSync(const ByteArray &aid)
+		throw (ExceptionBase &, ErrorIO &, ErrorIllegalState &,
+			ErrorIllegalParameter &, ErrorSecurity &)
 	{
-		return openChannelSync(1, aid);
+		return openChannelSync(1, aid, 0x00);
 	}
 
-	Channel *Session::openLogicalChannelSync(unsigned char *aid, unsigned int length)
-		throw (ErrorIO &, ErrorIllegalState &, ErrorIllegalParameter &, ErrorSecurity &)
+	Channel *Session::openLogicalChannelSync(const ByteArray &aid, unsigned char P2)
+		throw (ExceptionBase &, ErrorIO &, ErrorIllegalState &,
+			ErrorIllegalParameter &, ErrorSecurity &)
 	{
-		return openLogicalChannelSync(ByteArray(aid, length));
+		return openChannelSync(1, aid, P2);
 	}
 
-	int Session::openLogicalChannel(ByteArray aid, openChannelCallback callback, void *userData)
+	Channel *Session::openLogicalChannelSync(const unsigned char *aid, unsigned int length)
+		throw (ExceptionBase &, ErrorIO &, ErrorIllegalState &,
+			ErrorIllegalParameter &, ErrorSecurity &)
+	{
+		ByteArray temp(aid, length);
+
+		return openLogicalChannelSync(temp, 0x00);
+	}
+
+	Channel *Session::openLogicalChannelSync(const unsigned char *aid, unsigned int length, unsigned char P2)
+		throw (ExceptionBase &, ErrorIO &, ErrorIllegalState &,
+			ErrorIllegalParameter &, ErrorSecurity &)
+	{
+		ByteArray temp(aid, length);
+
+		return openLogicalChannelSync(temp, P2);
+	}
+
+	int Session::openLogicalChannel(const ByteArray &aid, openChannelCallback callback, void *userData)
 	{
 		return openChannel(1, aid, callback, userData);
 	}
 
-	int Session::openLogicalChannel(unsigned char *aid, unsigned int length,
+	int Session::openLogicalChannel(const unsigned char *aid, unsigned int length,
 		openChannelCallback callback, void *userData)
 	{
-		return openLogicalChannel(ByteArray(aid, length), callback, userData);
-	}
+		ByteArray temp(aid, length);
 
-	bool Session::dispatcherCallback(void *message)
-	{
-		Message *msg = (Message *)message;
-		Session *session = NULL;
-		bool result = false;
-
-		if (msg == NULL)
-		{
-			SCARD_DEBUG_ERR("message is null");
-			return result;
-		}
-
-		session = (Session *)msg->caller;
-
-		switch (msg->message)
-		{
-		case Message::MSG_REQUEST_OPEN_CHANNEL :
-			{
-				Channel *channel = NULL;
-
-				SCARD_DEBUG("MSG_REQUEST_OPEN_CHANNEL");
-
-				if (msg->param1 != 0)
-				{
-					/* create new instance of channel */
-					channel = new ClientChannel(session->context,
-						session, msg->param2, msg->data, (void *)msg->param1);
-					if (channel != NULL)
-					{
-						session->channels.push_back(channel);
-					}
-					else
-					{
-						SCARD_DEBUG_ERR("alloc failed");
-
-						msg->error = SCARD_ERROR_OUT_OF_MEMORY;
-					}
-				}
-
-				if (msg->isSynchronousCall() == true) /* synchronized call */
-				{
-					/* sync call */
-					session->syncLock();
-
-					/* copy result */
-					session->error = msg->error;
-					session->openedChannel = channel;
-
-					session->signalCondition();
-					session->syncUnlock();
-				}
-				else if (msg->callback != NULL)
-				{
-					openChannelCallback cb = (openChannelCallback)msg->callback;
-
-					/* async call */
-					cb(channel, msg->error, msg->userParam);
-				}
-			}
-			break;
-
-		case Message::MSG_REQUEST_GET_ATR :
-			{
-				SCARD_DEBUG("MSG_REQUEST_GET_ATR");
-
-				if (msg->isSynchronousCall() == true) /* synchronized call */
-				{
-					/* sync call */
-					session->syncLock();
-
-					session->error = msg->error;
-					session->atr = msg->data;
-
-					session->signalCondition();
-					session->syncUnlock();
-				}
-				else if (msg->callback != NULL)
-				{
-					getATRCallback cb = (getATRCallback)msg->callback;
-
-					/* async call */
-					cb(msg->data.getBuffer(), msg->data.getLength(), msg->error, msg->userParam);
-				}
-			}
-			break;
-
-		case Message::MSG_REQUEST_CLOSE_SESSION :
-			{
-				SCARD_DEBUG("MSG_REQUEST_CLOSE_SESSION");
-
-				if (msg->isSynchronousCall() == true) /* synchronized call */
-				{
-					/* sync call */
-					session->syncLock();
-
-					session->error = msg->error;
-
-					session->signalCondition();
-					session->syncUnlock();
-				}
-				else if (msg->callback != NULL)
-				{
-					closeSessionCallback cb = (closeSessionCallback)msg->callback;
-
-					/* async call */
-					cb(msg->error, msg->userParam);
-				}
-			}
-			break;
-
-		case Message::MSG_REQUEST_GET_CHANNEL_COUNT :
-			{
-				SCARD_DEBUG("MSG_REQUEST_GET_CHANNEL_COUNT");
-
-				if (msg->isSynchronousCall() == true) /* synchronized call */
-				{
-					/* sync call */
-					session->syncLock();
-
-					session->error = msg->error;
-					session->channelCount = msg->param1;
-
-					session->signalCondition();
-					session->syncUnlock();
-				}
-				else if (msg->callback != NULL)
-				{
-					getChannelCountCallback cb = (getChannelCountCallback)msg->callback;
-
-					/* async call */
-					cb(msg->param1, msg->error, msg->userParam);
-				}
-			}
-			break;
-
-		default :
-			SCARD_DEBUG("unknown message : %s", msg->toString());
-			break;
-		}
-
-		return result;
+		return openLogicalChannel(temp, callback, userData);
 	}
 } /* namespace smartcard_service_api */
 
@@ -623,20 +607,223 @@ namespace smartcard_service_api
 	} \
 	else \
 	{ \
-		SCARD_DEBUG_ERR("Invalid param"); \
+		_ERR("Invalid param"); \
 	}
 
 using namespace smartcard_service_api;
 
-EXTERN_API reader_h session_get_reader(session_h handle)
+EXTERN_API int session_get_reader(session_h handle, int* reader_handle)
 {
+	int result = SCARD_ERROR_OK;
 	reader_h reader = NULL;
 
 	SESSION_EXTERN_BEGIN;
+
+	try
+	{
 		reader = session->getReader();
+		*reader_handle = (int)reader;
+	}
+	catch (ExceptionBase &e)
+	{
+		_ERR("Error occur : %s\n", e.what());
+		result = e.getErrorCode();
+		*reader_handle = 0;
+	}
+	catch (...)
+	{
+		_ERR("Error occur : unknown error\n");
+		result = SCARD_ERROR_UNKNOWN;
+		*reader_handle = 0;
+	}
+
 	SESSION_EXTERN_END;
 
-	return reader;
+	return result;
+}
+
+EXTERN_API int session_is_closed(session_h handle, bool* is_closed)
+{
+	int result = SCARD_ERROR_OK;
+
+	SESSION_EXTERN_BEGIN;
+
+	try
+	{
+		*is_closed = session->isClosed();
+	}
+	catch (ExceptionBase &e)
+	{
+		_ERR("Error occur : %s\n", e.what());
+		result = e.getErrorCode();
+	}
+	catch (...)
+	{
+		_ERR("Error occur : unknown error\n");
+		result = SCARD_ERROR_UNKNOWN;
+	}
+
+	SESSION_EXTERN_END;
+
+	return result;
+}
+
+EXTERN_API int session_close_channels(session_h handle)
+{
+	int result = SCARD_ERROR_OK;
+
+	SESSION_EXTERN_BEGIN;
+
+	try
+	{
+		session->closeChannels();
+	}
+	catch (ExceptionBase &e)
+	{
+		_ERR("Error occur : %s\n", e.what());
+		result = e.getErrorCode();
+	}
+	catch (...)
+	{
+		_ERR("Error occur : unknown error\n");
+		result = SCARD_ERROR_UNKNOWN;
+	}
+
+	SESSION_EXTERN_END;
+
+	return result;
+}
+
+EXTERN_API int session_get_atr_sync(session_h handle, unsigned char **buffer, unsigned int *length)
+{
+	ByteArray temp;
+	int result = SCARD_ERROR_OK;
+
+	SESSION_EXTERN_BEGIN;
+
+	try
+	{
+		temp = session->getATRSync();
+
+		if (temp.size() > 0)
+		{
+			*buffer = (unsigned char *)calloc(temp.size(), sizeof(char));
+			*length = temp.size();
+
+			memcpy(*buffer, temp.getBuffer(), *length);
+		}
+	}
+	catch (ErrorIllegalState &e)
+	{
+		_ERR("Error occur : %s\n", e.what());
+		result = e.getErrorCode();
+
+		if(result == SCARD_ERROR_OPERATION_NOT_SUPPORTED)
+		{
+			*length = 0;
+			result = SCARD_ERROR_OK;
+		}
+	}
+	catch (ExceptionBase &e)
+	{
+		_ERR("Error occur : %s\n", e.what());
+		result = e.getErrorCode();
+		*length = 0;
+	}
+	catch (...)
+	{
+		_ERR("Error occur : unknown error\n");
+		result = SCARD_ERROR_UNKNOWN;
+		*length = 0;
+	}
+
+	SESSION_EXTERN_END;
+
+	return result;
+}
+
+EXTERN_API int session_close_sync(session_h handle)
+{
+	int result = SCARD_ERROR_OK;
+
+	SESSION_EXTERN_BEGIN;
+
+	try
+	{
+		session->closeSync();
+	}
+	catch (ExceptionBase &e)
+	{
+		_ERR("Error occur : %s\n", e.what());
+		result = e.getErrorCode();
+	}
+	catch (...)
+	{
+		_ERR("Error occur : unknown error\n");
+		result = SCARD_ERROR_UNKNOWN;
+	}
+
+	SESSION_EXTERN_END;
+
+	return result;
+}
+
+EXTERN_API int session_open_basic_channel_sync(session_h handle, unsigned char *aid,
+	unsigned int length, unsigned char P2, int* channel_handle)
+{
+	int result = SCARD_ERROR_OK;
+
+	SESSION_EXTERN_BEGIN;
+
+	try
+	{
+		*channel_handle = (int)session->openBasicChannelSync(aid, length, P2);
+	}
+	catch (ExceptionBase &e)
+	{
+		_ERR("Error occur : %s\n", e.what());
+		result = e.getErrorCode();
+		*channel_handle = 0;
+	}
+	catch (...)
+	{
+		_ERR("Error occur : unknown error\n");
+		result = SCARD_ERROR_UNKNOWN;
+		*channel_handle = 0;
+	}
+
+	SESSION_EXTERN_END;
+
+	return result;
+}
+
+EXTERN_API  int session_open_logical_channel_sync(session_h handle, unsigned char *aid,
+	unsigned int length, unsigned char P2, int* channel_handle)
+{
+	int result = SCARD_ERROR_OK;
+
+	SESSION_EXTERN_BEGIN;
+
+	try
+	{
+		*channel_handle = (int)session->openLogicalChannelSync(aid, length, P2);
+	}
+	catch (ExceptionBase &e)
+	{
+		_ERR("Error occur : %s\n", e.what());
+		result = e.getErrorCode();
+		*channel_handle = 0;
+	}
+	catch (...)
+	{
+		_ERR("Error occur : unknown error\n");
+		result = SCARD_ERROR_UNKNOWN;
+		*channel_handle = 0;
+	}
+
+	SESSION_EXTERN_END;
+
+	return result;
 }
 
 EXTERN_API int session_get_atr(session_h handle, session_get_atr_cb callback, void *userData)
@@ -659,24 +846,6 @@ EXTERN_API int session_close(session_h handle, session_close_session_cb callback
 	SESSION_EXTERN_END;
 
 	return result;
-}
-
-EXTERN_API bool session_is_closed(session_h handle)
-{
-	bool result = false;
-
-	SESSION_EXTERN_BEGIN;
-		result = session->isClosed();
-	SESSION_EXTERN_END;
-
-	return result;
-}
-
-EXTERN_API void session_close_channels(session_h handle)
-{
-	SESSION_EXTERN_BEGIN;
-		session->closeChannels();
-	SESSION_EXTERN_END;
 }
 
 EXTERN_API int session_open_basic_channel(session_h handle, unsigned char *aid,
@@ -703,12 +872,12 @@ EXTERN_API int session_open_logical_channel(session_h handle, unsigned char *aid
 	return result;
 }
 
-EXTERN_API int session_get_channel_count(session_h handle, session_get_channel_count_cb callback, void * userData)
+EXTERN_API size_t session_get_channel_count(session_h handle)
 {
-	int result = -1;
+	size_t result = 0;
 
 	SESSION_EXTERN_BEGIN;
-		result = session->getChannelCount((getChannelCountCallback)callback, userData);
+		result = session->getChannelCount();
 	SESSION_EXTERN_END;
 
 	return result;
@@ -718,75 +887,3 @@ EXTERN_API void session_destroy_instance(session_h handle)
 {
 }
 
-EXTERN_API int session_get_atr_sync(session_h handle, unsigned char **buffer, unsigned int *length)
-{
-	ByteArray temp;
-	int result = -1;
-
-#ifdef CLIENT_IPC_THREAD
-	if (buffer == NULL || length == NULL)
-		return result;
-
-	SESSION_EXTERN_BEGIN;
-		temp = session->getATRSync();
-		if (temp.getLength() > 0)
-		{
-			*length = temp.getLength();
-			*buffer = (unsigned char *)calloc(1, *length);
-			memcpy(*buffer, temp.getBuffer(), *length);
-
-			result = 0;
-		}
-		SESSION_EXTERN_END;
-#endif
-
-	return result;
-}
-
-EXTERN_API void session_close_sync(session_h handle)
-{
-#ifdef CLIENT_IPC_THREAD
-	SESSION_EXTERN_BEGIN;
-		session->closeSync();
-	SESSION_EXTERN_END;
-#endif
-}
-
-EXTERN_API channel_h session_open_basic_channel_sync(session_h handle, unsigned char *aid, unsigned int length)
-{
-	channel_h result = NULL;
-
-#ifdef CLIENT_IPC_THREAD
-	SESSION_EXTERN_BEGIN;
-		result = session->openBasicChannelSync(aid, length);
-	SESSION_EXTERN_END;
-#endif
-
-	return result;
-}
-
-EXTERN_API channel_h session_open_logical_channel_sync(session_h handle, unsigned char *aid, unsigned int length)
-{
-	channel_h result = NULL;
-
-#ifdef CLIENT_IPC_THREAD
-	SESSION_EXTERN_BEGIN;
-		result = session->openLogicalChannelSync(aid, length);
-	SESSION_EXTERN_END;
-#endif
-
-	return result;
-}
-
-EXTERN_API unsigned int session_get_channel_count_sync(session_h handle)
-{
-	unsigned int result = 0;
-
-#ifdef CLIENT_IPC_THREAD
-	SESSION_EXTERN_BEGIN;
-		result = session->getChannelCountSync();
-	SESSION_EXTERN_END;
-#endif
-
-	return result;
-}

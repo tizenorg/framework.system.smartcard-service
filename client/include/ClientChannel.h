@@ -18,6 +18,7 @@
 #define CLIENTCHANNEL_H_
 
 /* standard library header */
+#include <gio/gio.h>
 
 /* SLP library header */
 
@@ -36,32 +37,34 @@ namespace smartcard_service_api
 	private:
 		void *context;
 		void *handle;
-		/* temporary data for sync function */
-		int error;
-		ByteArray response;
+		void *proxy;
 
 		ClientChannel(void *context, Session *session, int channelNum,
-			ByteArray selectResponse, void *handle);
+			const ByteArray &selectResponse, void *handle);
 		~ClientChannel();
 
-		static bool dispatcherCallback(void *message);
+		static void channel_transmit_cb(GObject *source_object,
+			GAsyncResult *res, gpointer user_data);
+		static void channel_close_cb(GObject *source_object,
+			GAsyncResult *res, gpointer user_data);
 
 	public:
-		int close(closeCallback callback, void *userParam);
-		int transmit(ByteArray command, transmitCallback callback,
-			void *userParam);
+		int close(closeChannelCallback callback, void *userParam);
+		int transmit(const ByteArray &command,
+			transmitCallback callback, void *userParam);
+		bool selectNext(){ return false; }
 
 		void closeSync()
 			throw(ExceptionBase &, ErrorIO &, ErrorIllegalState &,
 				ErrorSecurity &, ErrorIllegalParameter &);
-		int transmitSync(ByteArray command, ByteArray &result)
+		int transmitSync(const ByteArray &command, ByteArray &result)
 			throw(ExceptionBase &, ErrorIO &, ErrorIllegalState &,
 				ErrorIllegalParameter &, ErrorSecurity &);
 
-		friend class ClientDispatcher;
+		void *getHandle(){ return handle; }
+
 		friend class Session;
 	};
-
 } /* namespace smartcard_service_api */
 #endif /* __cplusplus */
 
@@ -71,21 +74,25 @@ extern "C"
 {
 #endif /* __cplusplus */
 
-bool channel_is_basic_channel(channel_h handle);
-bool channel_is_closed(channel_h handle);
-
-unsigned int channel_get_select_response_length(channel_h handle);
-bool channel_get_select_response(channel_h handle, unsigned char *buffer,
-	unsigned int length);
-session_h channel_get_session(channel_h handle);
-void channel_destroy_instance(channel_h handle) __attribute__((deprecated)) ;
+int channel_is_basic_channel(channel_h handle, bool* is_basic_channel);
+int channel_is_closed(channel_h handle, bool* is_closed );
+int channel_get_session(channel_h handle, int *session_handle);
+int channel_close_sync(channel_h handle);
+int channel_transmit_sync(channel_h handle, unsigned char *command,
+	unsigned int cmd_len, unsigned char **response, unsigned int *resp_len);
+int channel_get_select_response(channel_h handle,
+	unsigned char *buffer, size_t* length);
+int channel_get_transmit_response(channel_h handle,
+	unsigned char *buffer, size_t* length);
+int channel_select_next(channel_h hChannel, bool *pSuccess);
+////
 
 int channel_close(channel_h handle, channel_close_cb callback, void *userParam);
 int channel_transmit(channel_h handle, unsigned char *command,
 	unsigned int length, channel_transmit_cb callback, void *userParam);
-void channel_close_sync(channel_h handle);
-int channel_transmit_sync(channel_h handle, unsigned char *command,
-	unsigned int cmd_len, unsigned char **response, unsigned int *resp_len);
+unsigned int channel_get_select_response_length(channel_h handle);
+void channel_destroy_instance(channel_h handle) __attribute__((deprecated));
+
 
 #ifdef __cplusplus
 }

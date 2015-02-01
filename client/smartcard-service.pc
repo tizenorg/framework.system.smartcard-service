@@ -8,6 +8,6 @@ libdir=${prefix}/lib
 Name: smartcard-service
 Description: Make flags of Common library of Smartcard service
 Version: 1.0
-Requires: dlog
+Requires: glib-2.0 dlog
 Libs: -L${libdir} -lsmartcard-service
 Cflags: -I${includedir}/smartcard-service

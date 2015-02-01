@@ -18,6 +18,8 @@
 #define READER_H_
 
 /* standard library header */
+#include <glib.h>
+#include <gio/gio.h>
 
 /* SLP library header */
 
@@ -36,16 +38,14 @@ namespace smartcard_service_api
 	private:
 		void *context;
 		void *handle;
-		/* temporary data for sync function */
-		int error;
-		Session *openedSession;
+		void *proxy;
 
 		Reader(void *context, const char *name, void *handle);
 		~Reader();
 
-		void unavailable();
-
-		static bool dispatcherCallback(void *message);
+		inline void unavailable() { present = false; }
+		static void reader_open_session_cb(GObject *source_object,
+			GAsyncResult *res, gpointer user_data);
 
 	public:
 		void closeSessions()
@@ -56,8 +56,9 @@ namespace smartcard_service_api
 			throw(ExceptionBase &, ErrorIO &, ErrorIllegalState &,
 				ErrorIllegalParameter &, ErrorSecurity &);
 
+		void *getHandle(){ return handle; }
+
 		friend class SEService;
-		friend class ClientDispatcher;
 	};
 } /* namespace smartcard_service_api */
 #endif /* __cplusplus */
@@ -68,13 +69,15 @@ extern "C"
 {
 #endif /* __cplusplus */
 
-const char *reader_get_name(reader_h handle);
-se_service_h reader_get_se_service(reader_h handle);
-bool reader_is_secure_element_present(reader_h handle);
+int reader_get_name(reader_h handle, char** reader_name);
+int reader_is_secure_element_present(reader_h handle, bool* is_present);
+int reader_open_session_sync(reader_h handle, int *session_handle);
+int reader_close_sessions(reader_h handle);
+///
+
 int reader_open_session(reader_h handle, reader_open_session_cb callback,
 	void *userData);
-session_h reader_open_session_sync(reader_h handle);
-void reader_close_sessions(reader_h handle);
+se_service_h reader_get_se_service(reader_h handle);
 __attribute__((deprecated)) void reader_destroy_instance(reader_h handle);
 
 #ifdef __cplusplus

@@ -18,16 +18,16 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <glib.h>
 
 /* SLP library header */
 
 /* local header */
 #include "Debug.h"
-#include "Message.h"
-#include "ClientIPC.h"
 #include "ClientChannel.h"
 #include "ReaderHelper.h"
 #include "APDUHelper.h"
+#include "ClientGDBus.h"
 
 #ifndef EXTERN_API
 #define EXTERN_API __attribute__((visibility("default")))
@@ -36,7 +36,7 @@
 namespace smartcard_service_api
 {
 	ClientChannel::ClientChannel(void *context, Session *session,
-		int channelNum, ByteArray selectResponse, void *handle)
+		int channelNum, const ByteArray &selectResponse, void *handle)
 		: Channel(session)
 	{
 		this->channelNum = -1;
@@ -45,7 +45,7 @@ namespace smartcard_service_api
 
 		if (handle == NULL)
 		{
-			SCARD_DEBUG_ERR("ClientIPC::getInstance() failed");
+			_ERR("ClientIPC::getInstance() failed");
 
 			return;
 		}
@@ -54,6 +54,21 @@ namespace smartcard_service_api
 		this->handle = handle;
 		this->selectResponse = selectResponse;
 		this->context = context;
+
+		/* init default context */
+		GError *error = NULL;
+
+		proxy = smartcard_service_channel_proxy_new_for_bus_sync(
+			G_BUS_TYPE_SYSTEM, G_DBUS_PROXY_FLAGS_NONE,
+			"org.tizen.SmartcardService",
+			"/org/tizen/SmartcardService/Channel",
+			NULL, &error);
+		if (proxy == NULL)
+		{
+			_ERR("Can not create proxy : %s", error->message);
+			g_error_free(error);
+			return;
+		}
 	}
 
 	ClientChannel::~ClientChannel()
@@ -61,59 +76,133 @@ namespace smartcard_service_api
 		closeSync();
 	}
 
+	void ClientChannel::channel_transmit_cb(GObject *source_object,
+		GAsyncResult *res, gpointer user_data)
+	{
+		CallbackParam *param = (CallbackParam *)user_data;
+		transmitCallback callback;
+		gint result;
+		GVariant *var_response;
+		GError *error = NULL;
+		ByteArray response;
+
+		_INFO("MSG_REQUEST_TRANSMIT");
+
+		if (param == NULL) {
+			_ERR("null parameter!!!");
+			return;
+		}
+
+		callback = (transmitCallback)param->callback;
+
+		if (smartcard_service_channel_call_transmit_finish(
+			SMARTCARD_SERVICE_CHANNEL(source_object),
+			&result, &var_response, res, &error) == true) {
+			if (result == SCARD_ERROR_OK) {
+				GDBusHelper::convertVariantToByteArray(var_response, response);
+			} else {
+				_ERR("smartcard_service_channel_call_transmit failed, [%d]", result);
+			}
+		} else {
+			_ERR("smartcard_service_channel_call_transmit failed, [%s]", error->message);
+			g_error_free(error);
+
+			result = SCARD_ERROR_IPC_FAILED;
+		}
+
+		if (callback != NULL) {
+			callback(response.getBuffer(),
+				response.size(),
+				result, param->user_param);
+		}
+
+		delete param;
+	}
+
+	void ClientChannel::channel_close_cb(GObject *source_object,
+		GAsyncResult *res, gpointer user_data)
+	{
+		CallbackParam *param = (CallbackParam *)user_data;
+		ClientChannel *channel;
+		closeChannelCallback callback;
+		gint result;
+		GError *error = NULL;
+
+		_INFO("MSG_REQUEST_CLOSE_CHANNEL");
+
+		if (param == NULL) {
+			_ERR("null parameter!!!");
+			return;
+		}
+
+		channel = (ClientChannel *)param->instance;
+		callback = (closeChannelCallback)param->callback;
+
+		if (smartcard_service_channel_call_close_channel_finish(
+			SMARTCARD_SERVICE_CHANNEL(source_object),
+			&result, res, &error) == true) {
+			if (result == SCARD_ERROR_OK) {
+				channel->channelNum = -1;
+			} else {
+				_ERR("smartcard_service_channel_call_close_channel failed, [%d]", result);
+			}
+		} else {
+			_ERR("smartcard_service_channel_call_close_channel failed, [%s]", error->message);
+			g_error_free(error);
+
+			result = SCARD_ERROR_IPC_FAILED;
+		}
+
+		if (callback != NULL) {
+			callback(result, param->user_param);
+		}
+
+		delete param;
+	}
+
 	void ClientChannel::closeSync()
 		throw(ExceptionBase &, ErrorIO &, ErrorSecurity &,
 			ErrorIllegalState &, ErrorIllegalParameter &)
 	{
-#ifdef CLIENT_IPC_THREAD
 		if (isClosed() == false)
 		{
 			if (getSession()->getReader()->isSecureElementPresent() == true)
 			{
-				Message msg;
-				int rv;
+				gint ret;
+				GError *error = NULL;
 
-				/* send message to server */
-				msg.message = Message::MSG_REQUEST_CLOSE_CHANNEL;
-				msg.param1 = (unsigned long)handle;
-				msg.error = (unsigned long)context; /* using error to context */
-				msg.caller = (void *)this;
-				msg.callback = (void *)this; /* if callback is class instance, it means synchronized call */
 
-				syncLock();
-				if (ClientIPC::getInstance().sendMessage(&msg) == true)
-				{
-					rv = waitTimedCondition(0);
-					if (rv < 0)
-					{
-						SCARD_DEBUG_ERR("closeSync failed [%d]", rv);
-						this->error = SCARD_ERROR_OPERATION_TIMEOUT;
+				if (proxy == NULL) {
+					_ERR("dbus proxy is not initialized yet");
+					throw ErrorIllegalState(SCARD_ERROR_NOT_INITIALIZED);
+				}
+
+				if (smartcard_service_channel_call_close_channel_sync(
+					(SmartcardServiceChannel *)proxy,
+					GPOINTER_TO_UINT(context),
+					GPOINTER_TO_UINT(handle),
+					&ret, NULL, &error) == true) {
+					if (ret == SCARD_ERROR_OK) {
+						channelNum = -1;
+					} else {
+						_ERR("smartcard_service_channel_call_close_channel_sync failed, [%d]", ret);
+						THROW_ERROR(ret);
 					}
-				}
-				else
-				{
-					SCARD_DEBUG_ERR("sendMessage failed");
-					this->error = SCARD_ERROR_IPC_FAILED;
-				}
-				syncUnlock();
+				} else {
+					_ERR("smartcard_service_channel_call_close_channel_sync failed, [%s]", error->message);
+					g_error_free(error);
 
-				channelNum = -1;
-
-				if (this->error != SCARD_ERROR_OK)
-				{
-					ThrowError::throwError(this->error);
+					throw ErrorIO(SCARD_ERROR_IPC_FAILED);
 				}
 			}
 			else
 			{
-				/* FIXME */
-				SCARD_DEBUG("unavailable channel");
+				_INFO("unavailable channel");
 			}
 		}
-#endif
 	}
 
-	int ClientChannel::close(closeCallback callback, void *userParam)
+	int ClientChannel::close(closeChannelCallback callback, void *userParam)
 	{
 		int result = SCARD_ERROR_OK;
 
@@ -121,25 +210,21 @@ namespace smartcard_service_api
 		{
 			if (getSession()->getReader()->isSecureElementPresent() == true)
 			{
-				Message msg;
-				channelNum = -1;
+				CallbackParam *param = new CallbackParam();
 
-				/* send message to server */
-				msg.message = Message::MSG_REQUEST_CLOSE_CHANNEL;
-				msg.param1 = (unsigned long)handle;
-				msg.error = (unsigned long)context; /* using error to context */
-				msg.caller = (void *)this;
-				msg.callback = (void *)callback;
-				msg.userParam = userParam;
+				param->instance = this;
+				param->callback = (void *)callback;
+				param->user_param = userParam;
 
-				if (ClientIPC::getInstance().sendMessage(&msg) == false)
-				{
-					result = SCARD_ERROR_IPC_FAILED;
-				}
+				smartcard_service_channel_call_close_channel(
+					(SmartcardServiceChannel *)proxy,
+					GPOINTER_TO_UINT(context),
+					GPOINTER_TO_UINT(handle), NULL,
+					&ClientChannel::channel_close_cb, param);
 			}
 			else
 			{
-				SCARD_DEBUG_ERR("unavailable channel");
+				_ERR("unavailable channel");
 				result = SCARD_ERROR_ILLEGAL_STATE;
 			}
 		}
@@ -147,7 +232,7 @@ namespace smartcard_service_api
 		return result;
 	}
 
-	int ClientChannel::transmitSync(ByteArray command, ByteArray &result)
+	int ClientChannel::transmitSync(const ByteArray &command, ByteArray &result)
 		throw(ExceptionBase &, ErrorIO &, ErrorIllegalState &,
 			ErrorIllegalParameter &, ErrorSecurity &)
 	{
@@ -155,170 +240,69 @@ namespace smartcard_service_api
 
 		if (getSession()->getReader()->isSecureElementPresent() == true)
 		{
-			Message msg;
+			GVariant *var_command = NULL, *var_response = NULL;
+			GError *error = NULL;
 
-#ifdef CLIENT_IPC_THREAD
-			/* send message to server */
-			msg.message = Message::MSG_REQUEST_TRANSMIT;
-			msg.param1 = (unsigned long)handle;
-			msg.param2 = 0;
-			msg.data = command;
-			msg.error = (unsigned long)context; /* using error to context */
-			msg.caller = (void *)this;
-			msg.callback = (void *)this; /* if callback is class instance, it means synchronized call */
+			var_command = GDBusHelper::convertByteArrayToVariant(command);
 
-			syncLock();
-			if (ClientIPC::getInstance().sendMessage(&msg) == true)
-			{
-				rv = waitTimedCondition(0);
-				if (rv >= 0)
-				{
-					result = response;
+			if (smartcard_service_channel_call_transmit_sync(
+				(SmartcardServiceChannel *)proxy,
+				GPOINTER_TO_UINT(context),
+				GPOINTER_TO_UINT(handle),
+				var_command, &rv, &var_response,
+				NULL, &error) == true) {
 
-					rv = SCARD_ERROR_OK;
+				if (rv == SCARD_ERROR_OK) {
+					GDBusHelper::convertVariantToByteArray(var_response, transmitResponse);
+					result = transmitResponse;
+				} else {
+					_ERR("smartcard_service_session_call_get_atr_sync failed, [%d]", rv);
+					THROW_ERROR(rv);
 				}
-				else
-				{
-					SCARD_DEBUG_ERR("timeout");
+			} else {
+				_ERR("smartcard_service_session_call_get_atr_sync failed, [%s]", error->message);
+				g_error_free(error);
 
-					this->error = SCARD_ERROR_OPERATION_TIMEOUT;
-				}
+				throw ErrorIO(SCARD_ERROR_IPC_FAILED);
 			}
-			else
-			{
-				SCARD_DEBUG_ERR("sendMessage failed");
-			}
-			syncUnlock();
-
-			if (this->error != SCARD_ERROR_OK)
-			{
-				ThrowError::throwError(this->error);
-			}
-#endif
 		}
 		else
 		{
-			SCARD_DEBUG_ERR("unavailable channel");
+			_ERR("unavailable channel");
 			throw ErrorIllegalState(SCARD_ERROR_UNAVAILABLE);
 		}
 
 		return rv;
 	}
 
-	int ClientChannel::transmit(ByteArray command, transmitCallback callback, void *userParam)
+	int ClientChannel::transmit(const ByteArray &command, transmitCallback callback, void *userParam)
 	{
 		int result;
 
 		if (getSession()->getReader()->isSecureElementPresent() == true)
 		{
-			Message msg;
+			GVariant *var_command;
+			CallbackParam *param = new CallbackParam();
 
-			/* send message to server */
-			msg.message = Message::MSG_REQUEST_TRANSMIT;
-			msg.param1 = (unsigned long)handle;
-			msg.param2 = 0;
-			msg.data = command;
-			msg.error = (unsigned long)context; /* using error to context */
-			msg.caller = (void *)this;
-			msg.callback = (void *)callback;
-			msg.userParam = userParam;
+			param->instance = this;
+			param->callback = (void *)callback;
+			param->user_param = userParam;
 
-			if (ClientIPC::getInstance().sendMessage(&msg) == true)
-			{
-				result = SCARD_ERROR_OK;
-			}
-			else
-			{
-				result = SCARD_ERROR_IPC_FAILED;
-			}
+			var_command = GDBusHelper::convertByteArrayToVariant(command);
+
+			smartcard_service_channel_call_transmit(
+				(SmartcardServiceChannel *)proxy,
+				GPOINTER_TO_UINT(context),
+				GPOINTER_TO_UINT(handle),
+				var_command, NULL,
+				&ClientChannel::channel_transmit_cb, param);
+
+			result = SCARD_ERROR_OK;
 		}
 		else
 		{
-			SCARD_DEBUG_ERR("unavailable channel");
+			_ERR("unavailable channel");
 			result = SCARD_ERROR_ILLEGAL_STATE;
-		}
-
-		return result;
-	}
-
-	bool ClientChannel::dispatcherCallback(void *message)
-	{
-		Message *msg = (Message *)message;
-		ClientChannel *channel = NULL;
-		bool result = false;
-
-		if (msg == NULL)
-		{
-			SCARD_DEBUG_ERR("message is null");
-			return result;
-		}
-
-		channel = (ClientChannel *)msg->caller;
-
-		switch (msg->message)
-		{
-		case Message::MSG_REQUEST_TRANSMIT :
-			{
-				/* transmit result */
-				SCARD_DEBUG("MSG_REQUEST_TRANSMIT");
-
-				if (msg->error == 0 &&
-					ResponseHelper::getStatus(msg->data) == 0)
-				{
-					/* store select response */
-					if (msg->data.getAt(1) == APDUCommand::INS_SELECT_FILE)
-						channel->setSelectResponse(msg->data);
-				}
-
-				if (msg->isSynchronousCall() == true) /* synchronized call */
-				{
-					/* sync call */
-					channel->syncLock();
-
-					/* copy result */
-					channel->error = msg->error;
-					channel->response = msg->data;
-
-					channel->signalCondition();
-					channel->syncUnlock();
-				}
-				else if (msg->callback != NULL)
-				{
-					transmitCallback cb = (transmitCallback)msg->callback;
-
-					/* async call */
-					cb(msg->data.getBuffer(), msg->data.getLength(), msg->error, msg->userParam);
-				}
-			}
-			break;
-
-		case Message::MSG_REQUEST_CLOSE_CHANNEL :
-			{
-				SCARD_DEBUG("MSG_REQUEST_CLOSE_CHANNEL");
-
-				if (msg->isSynchronousCall() == true) /* synchronized call */
-				{
-					/* sync call */
-					channel->syncLock();
-
-					channel->error = msg->error;
-
-					channel->signalCondition();
-					channel->syncUnlock();
-				}
-				else if (msg->callback != NULL)
-				{
-					closeCallback cb = (closeCallback)msg->callback;
-
-					/* async call */
-					cb(msg->error, msg->userParam);
-				}
-			}
-			break;
-
-		default:
-			SCARD_DEBUG("unknwon message : %s", msg->toString());
-			break;
 		}
 
 		return result;
@@ -335,17 +319,275 @@ namespace smartcard_service_api
 	} \
 	else \
 	{ \
-		SCARD_DEBUG_ERR("Invalid param"); \
+		_ERR("Invalid param"); \
 	}
 
 using namespace smartcard_service_api;
+
+EXTERN_API int channel_close_sync(channel_h handle)
+{
+	int result = SCARD_ERROR_OK;
+
+	CHANNEL_EXTERN_BEGIN;
+
+	try
+	{
+		channel->closeSync();
+	}
+	catch (ExceptionBase &e)
+	{
+		_ERR("Error occur : %s\n", e.what());
+		result = e.getErrorCode();
+	}
+	catch (...)
+	{
+		_ERR("Error occur : unknown error\n");
+		result = SCARD_ERROR_UNKNOWN;
+	}
+
+	CHANNEL_EXTERN_END;
+
+	return result;
+}
+
+EXTERN_API int channel_transmit_sync(channel_h handle, unsigned char *command,
+	unsigned int cmd_len, unsigned char **response, unsigned int *resp_len)
+{
+	int result = SCARD_ERROR_OK;
+
+	if (command == NULL || cmd_len == 0 || response == NULL || resp_len == NULL)
+		return SCARD_ERROR_UNKNOWN;
+
+	CHANNEL_EXTERN_BEGIN;
+
+	try
+	{
+		ByteArray temp, resp;
+
+		temp.assign(command, cmd_len);
+		channel->transmitSync(temp, resp);
+
+		if (resp.size() > 0)
+		{
+			*resp_len = resp.size();
+			memcpy(*response, resp.getBuffer(), *resp_len);
+		}
+	}
+	catch (ExceptionBase &e)
+	{
+		_ERR("Error occur : %s\n", e.what());
+		result = e.getErrorCode();
+		*resp_len = 0;
+	}
+	catch (...)
+	{
+		_ERR("Error occur : unknown error\n");
+		result = SCARD_ERROR_UNKNOWN;
+		*resp_len = 0;
+	}
+
+	CHANNEL_EXTERN_END;
+
+	return result;
+}
+
+EXTERN_API int channel_is_basic_channel(channel_h handle, bool* is_basic_channel)
+{
+	int result = SCARD_ERROR_OK;
+
+	CHANNEL_EXTERN_BEGIN;
+
+	try
+	{
+		*is_basic_channel = channel->isBasicChannel();
+	}
+	catch (ExceptionBase &e)
+	{
+		_ERR("Error occur : %s\n", e.what());
+		result = e.getErrorCode();
+	}
+	catch (...)
+	{
+		_ERR("Error occur : unknown error\n");
+		result = SCARD_ERROR_UNKNOWN;
+	}
+
+	CHANNEL_EXTERN_END;
+
+	return result;
+}
+
+EXTERN_API int channel_is_closed(channel_h handle, bool* is_closed)
+{
+	int result = SCARD_ERROR_OK;
+
+	CHANNEL_EXTERN_BEGIN;
+
+	try
+	{
+		*is_closed = channel->isClosed();
+	}
+	catch (ExceptionBase &e)
+	{
+		_ERR("Error occur : %s\n", e.what());
+		result = e.getErrorCode();
+	}
+	catch (...)
+	{
+		_ERR("Error occur : unknown error\n");
+		result = SCARD_ERROR_UNKNOWN;
+	}
+
+	CHANNEL_EXTERN_END;
+
+	return result;
+}
+
+EXTERN_API int channel_get_select_response(channel_h handle,
+	unsigned char *buffer, size_t *length)
+{
+	int result = SCARD_ERROR_OK;
+
+	CHANNEL_EXTERN_BEGIN;
+
+	try
+	{
+		ByteArray response = channel->getSelectResponse();
+
+		*length = MIN(*length, response.size());
+
+		if (*length > 0)
+		{
+			memcpy(buffer, response.getBuffer(), *length);
+		}
+	}
+	catch (ExceptionBase &e)
+	{
+		_ERR("Error occur : %s\n", e.what());
+		result = e.getErrorCode();
+		*length = 0;
+	}
+	catch (...)
+	{
+		_ERR("Error occur : unknown error\n");
+		result = SCARD_ERROR_UNKNOWN;
+		*length = 0;
+	}
+
+	CHANNEL_EXTERN_END;
+
+	return result;
+}
+
+EXTERN_API int channel_get_transmit_response(channel_h handle,
+	unsigned char *buffer, size_t *length)
+{
+	int result = SCARD_ERROR_OK;
+
+	CHANNEL_EXTERN_BEGIN;
+
+	try
+	{
+		ByteArray response;
+
+		response = channel->getTransmitResponse();
+
+		*length = MIN(*length, response.size());
+
+		if (*length > 0)
+		{
+			memcpy(buffer, response.getBuffer(), *length);
+		}
+	}
+	catch (ExceptionBase &e)
+	{
+		_ERR("Error occur : %s\n", e.what());
+		result = e.getErrorCode();
+		*length = 0;
+	}
+	catch (...)
+	{
+		_ERR("Error occur : unknown error\n");
+		result = SCARD_ERROR_UNKNOWN;
+		*length = 0;
+	}
+
+	CHANNEL_EXTERN_END;
+
+	return result;
+}
+
+EXTERN_API int channel_get_session(channel_h handle, int *session_handle)
+{
+	int result = SCARD_ERROR_OK;
+	session_h session = NULL;
+
+	CHANNEL_EXTERN_BEGIN;
+
+	try
+	{
+		session = channel->getSession();
+		*session_handle = (int)session;
+	}
+	catch (ExceptionBase &e)
+	{
+		_ERR("Error occur : %s\n", e.what());
+		result = e.getErrorCode();
+	}
+	catch (...)
+	{
+		_ERR("Error occur : unknown error\n");
+		result = SCARD_ERROR_UNKNOWN;
+	}
+
+	CHANNEL_EXTERN_END;
+
+	return result;
+}
+
+EXTERN_API int channel_select_next(channel_h handle, bool *pSuccess)
+{
+	int result = SCARD_ERROR_OK;
+
+	CHANNEL_EXTERN_BEGIN;
+
+	try
+	{
+		*pSuccess = channel->selectNext();
+	}
+	catch (ExceptionBase &e)
+	{
+		_ERR("Error occur : %s\n", e.what());
+		result = e.getErrorCode();
+	}
+	catch (...)
+	{
+		_ERR("Error occur : unknown error\n");
+		result = SCARD_ERROR_UNKNOWN;
+	}
+
+	CHANNEL_EXTERN_END;
+
+	return result;
+}
+
+EXTERN_API unsigned int channel_get_select_response_length(channel_h handle)
+{
+	unsigned int result = 0;
+
+	CHANNEL_EXTERN_BEGIN;
+	result = channel->getSelectResponse().size();
+	CHANNEL_EXTERN_END;
+
+	return result;
+}
 
 EXTERN_API int channel_close(channel_h handle, channel_close_cb callback, void *userParam)
 {
 	int result = -1;
 
 	CHANNEL_EXTERN_BEGIN;
-	result = channel->close((closeCallback)callback, userParam);
+	result = channel->close((closeChannelCallback)callback, userParam);
 	CHANNEL_EXTERN_END;
 
 	return result;
@@ -359,128 +601,11 @@ EXTERN_API int channel_transmit(channel_h handle, unsigned char *command,
 	CHANNEL_EXTERN_BEGIN;
 	ByteArray temp;
 
-	temp.setBuffer(command, length);
+	temp.assign(command, length);
 	result = channel->transmit(temp, (transmitCallback)callback, userParam);
 	CHANNEL_EXTERN_END;
 
 	return result;
-}
-
-EXTERN_API void channel_close_sync(channel_h handle)
-{
-#ifdef CLIENT_IPC_THREAD
-	CHANNEL_EXTERN_BEGIN;
-	try
-	{
-		channel->closeSync();
-	}
-	catch (...)
-	{
-	}
-	CHANNEL_EXTERN_END;
-#endif
-}
-
-EXTERN_API int channel_transmit_sync(channel_h handle, unsigned char *command,
-	unsigned int cmd_len, unsigned char **response, unsigned int *resp_len)
-{
-	int result = -1;
-
-#ifdef CLIENT_IPC_THREAD
-	if (command == NULL || cmd_len == 0 || response == NULL || resp_len == NULL)
-		return result;
-
-	CHANNEL_EXTERN_BEGIN;
-	ByteArray temp, resp;
-
-	temp.setBuffer(command, cmd_len);
-
-	try
-	{
-		result = channel->transmitSync(temp, resp);
-		if (resp.getLength() > 0)
-		{
-			*resp_len = resp.getLength();
-			*response = (unsigned char *)calloc(1, *resp_len);
-			memcpy(*response, resp.getBuffer(), *resp_len);
-		}
-	}
-	catch (...)
-	{
-		result = -1;
-	}
-	CHANNEL_EXTERN_END;
-#endif
-
-	return result;
-}
-
-EXTERN_API bool channel_is_basic_channel(channel_h handle)
-{
-	bool result = false;
-
-	CHANNEL_EXTERN_BEGIN;
-	result = channel->isBasicChannel();
-	CHANNEL_EXTERN_END;
-
-	return result;
-}
-
-EXTERN_API bool channel_is_closed(channel_h handle)
-{
-	bool result = false;
-
-	CHANNEL_EXTERN_BEGIN;
-	result = channel->isClosed();
-	CHANNEL_EXTERN_END;
-
-	return result;
-}
-
-EXTERN_API unsigned int channel_get_select_response_length(channel_h handle)
-{
-	unsigned int result = 0;
-
-	CHANNEL_EXTERN_BEGIN;
-	result = channel->getSelectResponse().getLength();
-	CHANNEL_EXTERN_END;
-
-	return result;
-}
-
-EXTERN_API bool channel_get_select_response(channel_h handle,
-	unsigned char *buffer, unsigned int length)
-{
-	bool result = false;
-
-	if (buffer == NULL || length == 0)
-	{
-		return result;
-	}
-
-	CHANNEL_EXTERN_BEGIN;
-	ByteArray response;
-
-	response = channel->getSelectResponse();
-	if (response.getLength() > 0)
-	{
-		memcpy(buffer, response.getBuffer(), MIN(length, response.getLength()));
-		result = true;
-	}
-	CHANNEL_EXTERN_END;
-
-	return result;
-}
-
-EXTERN_API session_h channel_get_session(channel_h handle)
-{
-	session_h session = NULL;
-
-	CHANNEL_EXTERN_BEGIN;
-	session = channel->getSession();
-	CHANNEL_EXTERN_END;
-
-	return session;
 }
 
 EXTERN_API void channel_destroy_instance(channel_h handle)
