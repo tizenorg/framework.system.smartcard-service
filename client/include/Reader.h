@@ -1,24 +1,25 @@
 /*
-* Copyright (c) 2012 Samsung Electronics Co., Ltd All Rights Reserved
-*
-* Licensed under the Apache License, Version 2.0 (the "License");
-* you may not use this file except in compliance with the License.
-* You may obtain a copy of the License at
-*
-* http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific language governing permissions and
-* limitations under the License.
-*/
-
+ * Copyright (c) 2012, 2013 Samsung Electronics Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 #ifndef READER_H_
 #define READER_H_
 
 /* standard library header */
+#include <glib.h>
+#include <gio/gio.h>
 
 /* SLP library header */
 
@@ -37,27 +38,28 @@ namespace smartcard_service_api
 	private:
 		void *context;
 		void *handle;
-		ByteArray packageCert;
-		/* temporary data for sync function */
-		int error;
-		Session *openedSession;
+		void *proxy;
 
-		Reader(void *context, char *name, void *handle);
-
-		SessionHelper *openSessionSync();
-		static bool dispatcherCallback(void *message);
-		void getPackageCert();
-
-	public:
+		Reader(void *context, const char *name, void *handle);
 		~Reader();
 
+		inline void unavailable() { present = false; }
+		static void reader_open_session_cb(GObject *source_object,
+			GAsyncResult *res, gpointer user_data);
+
+	public:
+		void closeSessions()
+			throw(ErrorIO &, ErrorIllegalState &);
+
 		int openSession(openSessionCallback callback, void *userData);
-		void closeSessions();
+		SessionHelper *openSessionSync()
+			throw(ExceptionBase &, ErrorIO &, ErrorIllegalState &,
+				ErrorIllegalParameter &, ErrorSecurity &);
+
+		void *getHandle(){ return handle; }
 
 		friend class SEService;
-		friend class ClientDispatcher;
 	};
-
 } /* namespace smartcard_service_api */
 #endif /* __cplusplus */
 
@@ -67,12 +69,16 @@ extern "C"
 {
 #endif /* __cplusplus */
 
-const char *reader_get_name(reader_h handle);
+int reader_get_name(reader_h handle, char** reader_name);
+int reader_is_secure_element_present(reader_h handle, bool* is_present);
+int reader_open_session_sync(reader_h handle, int *session_handle);
+int reader_close_sessions(reader_h handle);
+///
+
+int reader_open_session(reader_h handle, reader_open_session_cb callback,
+	void *userData);
 se_service_h reader_get_se_service(reader_h handle);
-bool reader_is_secure_element_present(reader_h handle);
-int reader_open_session(reader_h handle, reader_open_session_cb callback, void *userData);
-void reader_close_sessions(reader_h handle);
-void reader_destroy_instance(reader_h handle);
+__attribute__((deprecated)) void reader_destroy_instance(reader_h handle);
 
 #ifdef __cplusplus
 }

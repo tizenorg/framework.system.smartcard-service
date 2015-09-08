@@ -1,19 +1,18 @@
 /*
-* Copyright (c) 2012 Samsung Electronics Co., Ltd All Rights Reserved
-*
-* Licensed under the Apache License, Version 2.0 (the "License");
-* you may not use this file except in compliance with the License.
-* You may obtain a copy of the License at
-*
-* http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific language governing permissions and
-* limitations under the License.
-*/
-
+ * Copyright (c) 2012, 2013 Samsung Electronics Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 /* standard library header */
 #include <stdio.h>
@@ -22,13 +21,14 @@
 /* SLP library header */
 
 /* local header */
+#include "smartcard-types.h"
 #include "Debug.h"
 #include "APDUHelper.h"
 
 namespace smartcard_service_api
 {
 	/* ResponseHelper class */
-	ResponseHelper::ResponseHelper()
+	ResponseHelper::ResponseHelper() : status(0)
 	{
 	}
 
@@ -44,21 +44,22 @@ namespace smartcard_service_api
 	bool ResponseHelper::setResponse(const ByteArray &response)
 	{
 		bool result = false;
-		status = 0;
-		dataField.releaseBuffer();
+		status = SCARD_ERROR_UNKNOWN;
+		dataField.clear();
 
 		this->response = response;
 
-		if (response.getLength() >= 2)
+		if (response.size() >= 2)
 		{
-			sw[0] = response.getReverseAt(1);
-			sw[1] = response.getReverseAt(0);
+			sw[0] = response.reverseAt(1);
+			sw[1] = response.reverseAt(0);
 
 			status = parseStatusWord(sw);
 
-			if (response.getLength() > 2)
+			if (response.size() > 2)
 			{
-				dataField.setBuffer(response.getBuffer(), response.getLength() - 2);
+				dataField.assign(response.getBuffer(),
+					response.size() - 2);
 			}
 
 			result = true;
@@ -67,20 +68,16 @@ namespace smartcard_service_api
 		return result;
 	}
 
-	int ResponseHelper::parseStatusWord(unsigned char *sw)
+	int ResponseHelper::parseStatusWord(const unsigned char *sw)
 	{
-		int result = 0;
+		int result = sw[0] << 8 | sw[1];
 
 		switch (sw[0])
 		{
 		/* Normal processing */
-		case (unsigned char)0x90 : /* SW2:00, No further qulification */
-			break;
-
+		case (unsigned char)0x90 : /* SW2:00, No further qualification */
 		case (unsigned char)0x91 : /* extra information */
-			break;
-
-		case (unsigned char)0x61 : /* SW2 encodes the number of data bytes still available */
+		case (unsigned char)0x92 : /* extra information */
 			break;
 
 		/* Warning processing */
@@ -89,6 +86,11 @@ namespace smartcard_service_api
 
 		case (unsigned char)0x63 : /* State of non-volatile memory has changed (further qualification in SW2) */
 			break;
+
+#if 0
+		case (unsigned char)0x61 : /* SW2 encodes the number of data bytes still available */
+			break;
+
 
 		/* Execution error */
 		case (unsigned char)0x64 : /* State of non-volatile memory is unchanged (further qualification in SW2) */
@@ -139,44 +141,36 @@ namespace smartcard_service_api
 		case (unsigned char)0x6F : /* SW2:00, No precise diagnosis */
 			result = -1;
 			break;
-
+#endif
 		default :
-			result = -1;
+			result *= -1;
 			break;
 		}
 
 		return result;
 	}
 
-	int ResponseHelper::getStatus()
-	{
-		return status;
-	}
-
 	int ResponseHelper::getStatus(const ByteArray &response)
 	{
 		int status = 0;
 
-		if (response.getLength() >= 2)
+		if (response.size() >= 2)
 		{
-			status = ResponseHelper::parseStatusWord(response.getBuffer((response.getLength() - 2)));
+			const uint8_t* buffer = response.getBuffer((response.size() - 2));
+			if(buffer != NULL)
+				status = ResponseHelper::parseStatusWord(buffer);
 		}
 
 		return status;
 	}
 
-	ByteArray ResponseHelper::getDataField()
-	{
-		return dataField;
-	}
-
-	ByteArray ResponseHelper::getDataField(const ByteArray &response)
+	const ByteArray ResponseHelper::getDataField(const ByteArray &response)
 	{
 		ByteArray result;
 
-		if (response.getLength() > 2)
+		if (response.size() > 2)
 		{
-			result.setBuffer(response.getBuffer(), response.getLength() - 2);
+			result.assign(response.getBuffer(), response.size() - 2);
 		}
 
 		return result;
@@ -194,7 +188,10 @@ namespace smartcard_service_api
 	{
 	}
 
-	bool APDUCommand::setCommand(unsigned char cla, unsigned char ins, unsigned char p1, unsigned char p2, ByteArray commandData, unsigned int maxResponseSize)
+	bool APDUCommand::setCommand(unsigned char cla, unsigned char ins,
+		unsigned char p1, unsigned char p2,
+		const ByteArray &commandData,
+		unsigned int maxResponseSize)
 	{
 		setCLA(cla);
 		setINS(ins);
@@ -209,15 +206,22 @@ namespace smartcard_service_api
 	bool APDUCommand::setCommand(const ByteArray &command)
 	{
 		bool result = false;
+		const uint8_t *buffer;
 		uint32_t offset = 0;
 		uint32_t lengthSize = 1;
 
-		if (command.getLength() < sizeof(header))
+		if (command.size() < sizeof(header))
 		{
 			return false;
 		}
 
-		memcpy(&header, command.getBuffer(offset), sizeof(header));
+		buffer = command.getBuffer(offset);
+		if(buffer == NULL)
+		{
+			return false;
+		}
+
+		memcpy(&header, buffer, sizeof(header));
 		offset += sizeof(header);
 
 		if (isExtendedLength)
@@ -225,7 +229,7 @@ namespace smartcard_service_api
 			lengthSize = 2;
 		}
 
-		if (command.getLength() - offset > lengthSize)
+		if (command.size() - offset > lengthSize)
 		{
 			unsigned int length = 0;
 
@@ -237,7 +241,10 @@ namespace smartcard_service_api
 			}
 			else
 			{
-				length = command.getAt(offset);
+				length = command.at(offset);
+				if (length == 0) {
+					length = 256;
+				}
 				offset += 1;
 			}
 
@@ -245,27 +252,40 @@ namespace smartcard_service_api
 			offset += length;
 		}
 
-		if (command.getLength() - offset == lengthSize)
+		if (command.size() - offset == lengthSize)
 		{
 			if (isExtendedLength)
 			{
-				/* TODO */
+				unsigned int temp;
+
+				temp = command.at(offset) << 8;
+				temp |= command.at(offset + 1);
+
+				if (temp == 0)
+					setMaxResponseSize(APDUCommand::LE_MAX);
+				else
+					setMaxResponseSize(temp);
+
 				offset += 2;
 			}
 			else
 			{
-				setMaxResponseSize(command.getAt(offset));
+				if (command.at(offset) == 0)
+					setMaxResponseSize(256);
+				else
+					setMaxResponseSize(command.at(offset));
+
 				offset += 1;
 			}
 		}
 
-		if (command.getLength() == offset)
+		if (command.size() == offset)
 		{
 			result = true;
 		}
 		else
 		{
-			SCARD_DEBUG_ERR("command stream is not correct, command.getLength() [%d], offset [%d]", command.getLength(), offset);
+			_ERR("command stream is not correct, command.size() [%d], offset [%d]", command.size(), offset);
 		}
 
 		return result;
@@ -277,23 +297,50 @@ namespace smartcard_service_api
 
 		if (channelNum != 0)
 		{
-			switch (type)
+			/* don't apply channel number to below command */
+			switch (getINS())
 			{
-			case 0 :
-				if (channelNum > 0 && channelNum < 4)
-				{
-					unsigned char temp;
-
-					temp = getCLA();
-					temp &= ~0x03;
-					temp |= (channelNum & 0x03);
-					setCLA(temp);
-
-					result = true;
-				}
+			case INS_TERMINAL_PROFILE :
+			case INS_FETCH :
+			case INS_TERMINAL_RESPONSE :
+				result = true;
 				break;
 
+			/* apply channel number */
 			default :
+				switch (type)
+				{
+				case CLA_CHANNEL_STANDARD : /* standard class byte, two logical channel bits (1~3) */
+					if (channelNum > 0 && channelNum < 4)
+					{
+						unsigned char temp;
+
+						temp = getCLA();
+						temp &= ~0x03;
+						temp |= (channelNum & 0x03);
+						setCLA(temp);
+
+						result = true;
+					}
+					break;
+
+				case CLA_CHANNEL_EXTENDED : /* extended class byte, four logical channel bits (1~15) */
+					if (channelNum > 0 && channelNum < 16)
+					{
+						unsigned char temp;
+
+						temp = getCLA();
+						temp &= ~0x0F;
+						temp |= (channelNum & 0x0F);
+						setCLA(temp);
+
+						result = true;
+					}
+					break;
+
+				default :
+					break;
+				}
 				break;
 			}
 		}
@@ -310,7 +357,7 @@ namespace smartcard_service_api
 		header.cla = cla;
 	}
 
-	unsigned char APDUCommand::getCLA()
+	unsigned char APDUCommand::getCLA() const
 	{
 		return header.cla;
 	}
@@ -324,7 +371,7 @@ namespace smartcard_service_api
 		header.ins = ins;
 	}
 
-	unsigned char APDUCommand::getINS()
+	unsigned char APDUCommand::getINS() const
 	{
 		return header.ins;
 	}
@@ -335,7 +382,7 @@ namespace smartcard_service_api
 		header.param[0] = p1;
 	}
 
-	unsigned char APDUCommand::getP1()
+	unsigned char APDUCommand::getP1() const
 	{
 		return header.param[0];
 	}
@@ -346,7 +393,7 @@ namespace smartcard_service_api
 		header.param[1] = p2;
 	}
 
-	unsigned char APDUCommand::getP2()
+	unsigned char APDUCommand::getP2() const
 	{
 		return header.param[1];
 	}
@@ -356,7 +403,7 @@ namespace smartcard_service_api
 		commandData = data;
 	}
 
-	ByteArray APDUCommand::getCommandData()
+	const ByteArray APDUCommand::getCommandData() const
 	{
 		return commandData;
 	}
@@ -366,12 +413,12 @@ namespace smartcard_service_api
 		this->maxResponseSize = maxResponseSize;
 	}
 
-	unsigned int APDUCommand::setMaxResponseSize()
+	unsigned int APDUCommand::getMaxResponseSize() const
 	{
 		return maxResponseSize;
 	}
 
-	bool APDUCommand::getBuffer(ByteArray &array)
+	bool APDUCommand::getBuffer(ByteArray &array) const
 	{
 		unsigned char *temp_buffer = NULL;
 		unsigned int temp_len = 0;
@@ -385,18 +432,18 @@ namespace smartcard_service_api
 		temp_len += sizeof(header);
 
 		/* calculate lc length */
-		if (commandData.getLength() > 0)
+		if (commandData.size() > 0)
 		{
-			if (isExtendedLength/*commandData.getLength() > 255*/)
+			if (isExtendedLength/*commandData.size() > 255*/)
 			{
-				lc[1] = (commandData.getLength() >> 8) & 0x000000FF;
-				lc[2] = commandData.getLength() & 0x000000FF;
+				lc[1] = (commandData.size() >> 8) & 0x000000FF;
+				lc[2] = commandData.size() & 0x000000FF;
 
 				lc_len = 3;
 			}
 			else
 			{
-				lc[0] = commandData.getLength() & 0x000000FF;
+				lc[0] = commandData.size() & 0x000000FF;
 
 				lc_len = 1;
 			}
@@ -405,12 +452,12 @@ namespace smartcard_service_api
 		temp_len += lc_len;
 
 		/* add command data length */
-		temp_len += commandData.getLength();
+		temp_len += commandData.size();
 
 		/* calculate le length */
 		if (maxResponseSize > 0)
 		{
-			if (isExtendedLength/*commandData.getLength() > 255*/)
+			if (isExtendedLength/*commandData.size() > 255*/)
 			{
 				if (maxResponseSize < 65536)
 				{
@@ -426,7 +473,7 @@ namespace smartcard_service_api
 			}
 			else
 			{
-				if (maxResponseSize != 256)
+				if (maxResponseSize < 256)
 					le[0] = maxResponseSize & 0x000000FF;
 
 				le_len = 1;
@@ -445,13 +492,13 @@ namespace smartcard_service_api
 		memcpy(temp_buffer + offset, &header, sizeof(header));
 		offset += sizeof(header);
 
-		if (commandData.getLength() > 0)
+		if (commandData.size() > 0)
 		{
 			memcpy(temp_buffer + offset, &lc, lc_len);
 			offset += lc_len;
 
-			memcpy(temp_buffer + offset, commandData.getBuffer(), commandData.getLength());
-			offset += commandData.getLength();
+			memcpy(temp_buffer + offset, commandData.getBuffer(), commandData.size());
+			offset += commandData.size();
 		}
 
 		if (maxResponseSize > 0)
@@ -460,14 +507,15 @@ namespace smartcard_service_api
 			offset += le_len;
 		}
 
-		array.setBuffer(temp_buffer, temp_len);
+		array.assign(temp_buffer, temp_len);
 		delete []temp_buffer;
 
 		return true;
 	}
 
 	/* APDUHelper class */
-	ByteArray APDUHelper::generateAPDU(int command, int channel, ByteArray data)
+	const ByteArray APDUHelper::generateAPDU(int command,
+		int channel, const ByteArray &data)
 	{
 		ByteArray result;
 		APDUCommand apdu;
@@ -495,7 +543,7 @@ namespace smartcard_service_api
 			break;
 
 		case COMMAND_SELECT_BY_DF_NAME :
-			apdu.setCommand(0, APDUCommand::INS_SELECT_FILE, APDUCommand::P1_SELECT_BY_DF_NAME, APDUCommand::P2_SELECT_GET_FCP, data, 0);
+			apdu.setCommand(0, APDUCommand::INS_SELECT_FILE, APDUCommand::P1_SELECT_BY_DF_NAME, APDUCommand::P2_SELECT_GET_FCI, data, 0);
 			apdu.getBuffer(result);
 			break;
 

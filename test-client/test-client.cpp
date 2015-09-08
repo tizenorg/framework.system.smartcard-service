@@ -1,19 +1,18 @@
 /*
-* Copyright (c) 2012 Samsung Electronics Co., Ltd All Rights Reserved
-*
-* Licensed under the Apache License, Version 2.0 (the "License");
-* you may not use this file except in compliance with the License.
-* You may obtain a copy of the License at
-*
-* http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific language governing permissions and
-* limitations under the License.
-*/
-
+ * Copyright (c) 2012, 2013 Samsung Electronics Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 #include <stdio.h>
 #include <string.h>
@@ -51,27 +50,43 @@ class TestEventHandler : public SEServiceListener
 {
 	void serviceConnected(SEServiceHelper *service, void *userData)
 	{
-		SCARD_BEGIN();
+		_BEGIN();
 		testConnectedCallback(service, userData);
-		SCARD_END();
+		_END();
 	}
 
 	void eventHandler(SEServiceHelper *service, char *seName, int event, void *userData)
 	{
-		SCARD_BEGIN();
+//		user_context_t *context = (user_context_t *)userData;
+		vector<ReaderHelper *> readers;
+		size_t i;
 
-		SCARD_DEBUG("event occured service [%p], seName[%p], event [%d]", service, seName, event);
+		_BEGIN();
 
-		SCARD_END();
+		_INFO("event occurred service [%p], seName[%s], event [%d], userData [%p]", service, seName, event, userData);
+
+		readers = service->getReaders();
+
+		for (i = 0; i < readers.size(); i++)
+		{
+			_DBG("Reader[%d] : name [%s], %s", i, readers[i]->getName(), readers[i]->isSecureElementPresent() ? "available" : "unavailable");
+		}
+
+		if (event == 1)
+		{
+			testConnectedCallback(service, userData);
+		}
+
+		_END();
 	}
 
 	void errorHandler(SEServiceHelper *service, int error, void *userData)
 	{
-		SCARD_BEGIN();
+		_BEGIN();
 
-		SCARD_DEBUG("error occured service [%p], error [%d]", service, error);
+		_ERR("error occurred service [%p], error [%d]", service, error);
 
-		SCARD_END();
+		_END();
 	}
 };
 
@@ -81,7 +96,7 @@ void testCloseCallback(int error, void *userData)
 {
 	user_context_t *context = (user_context_t *)userData;
 
-	SCARD_DEBUG("result [%d], userData [%p]", error, userData);
+	_DBG("result [%d], userData [%p]", error, userData);
 
 	context->clientService->shutdown();
 }
@@ -91,14 +106,14 @@ void testTransmitCallback(unsigned char *buffer, unsigned int length, int error,
 	ByteArray response(buffer, length);
 	user_context_t *context = (user_context_t *)userData;
 
-	SCARD_DEBUG("buffer [%p], length [%d], error [%d], userData [%p]", buffer, length, error, userData);
+	_DBG("buffer [%p], length [%d], error [%d], userData [%p]", buffer, length, error, userData);
 
 	context->clientChannel->close(testCloseCallback, userData);
 }
 
 void testOpenChannelCallback(Channel *channel, int error, void *userData)
 {
-	SCARD_DEBUG("channel [%p]", channel);
+	_DBG("channel [%p]", channel);
 
 	if (error == 0 && channel != NULL)
 	{
@@ -111,18 +126,18 @@ void testOpenChannelCallback(Channel *channel, int error, void *userData)
 
 		response = channel->getSelectResponse();
 
-		SCARD_DEBUG("response : %s", response.toString());
+		_INFO("response : %s", response.toString().c_str());
 
-		SCARD_DEBUG("isBasicChannel() = %s", channel->isBasicChannel() ? "Basic" : "Logical");
-		SCARD_DEBUG("isClosed() = %s", channel->isClosed() ? "Closed" : "Opened");
+		_DBG("isBasicChannel() = %s", channel->isBasicChannel() ? "Basic" : "Logical");
+		_DBG("isClosed() = %s", channel->isClosed() ? "Closed" : "Opened");
 
-		data.setBuffer((unsigned char *)&fid, 2);
+		data.assign((unsigned char *)&fid, 2);
 		command = APDUHelper::generateAPDU(APDUHelper::COMMAND_SELECT_BY_ID, 0, data);
 		context->clientChannel->transmit(command, testTransmitCallback, userData);
 	}
 	else
 	{
-		SCARD_DEBUG_ERR("openBasicChannel failed");
+		_ERR("openBasicChannel failed");
 	}
 }
 
@@ -133,9 +148,9 @@ void testGetATRCallback(unsigned char *atr, unsigned int length, int error, void
 	ByteArray aid, result(atr, length);
 	user_context_t *context = (user_context_t *)userData;
 
-	SCARD_DEBUG("atr[%d] : %s", result.getLength(), result.toString());
+	_DBG("atr[%d] : %s", result.size(), result.toString().c_str());
 
-	aid.setBuffer(MF, sizeof(MF));
+	aid.assign(MF, sizeof(MF));
 	context->clientSession->openLogicalChannel(aid, testOpenChannelCallback, userData);
 }
 
@@ -146,7 +161,7 @@ void testCloseSessionCallback(int error, void *userData)
 
 void testOpenSessionCallback(SessionHelper *session, int error, void *userData)
 {
-	SCARD_DEBUG("session [%p]", session);
+	_DBG("session [%p]", session);
 
 	if (session != NULL)
 	{
@@ -157,7 +172,7 @@ void testOpenSessionCallback(SessionHelper *session, int error, void *userData)
 	}
 	else
 	{
-		SCARD_DEBUG_ERR("openSession failed");
+		_ERR("openSession failed");
 	}
 }
 
@@ -166,11 +181,11 @@ void testConnectedCallback(SEServiceHelper *service, void *userData)
 	vector<ReaderHelper *> readers;
 	user_context_t *context = (user_context_t *)userData;
 
-	SCARD_BEGIN();
+	_BEGIN();
 
 	if (service != NULL)
 	{
-		SCARD_DEBUG("callback called, service [%p]", service);
+		_DBG("callback called, service [%p]", service);
 
 		context->clientService = service;
 
@@ -182,32 +197,44 @@ void testConnectedCallback(SEServiceHelper *service, void *userData)
 
 			reader = (Reader *)readers[0];
 
-			SCARD_DEBUG("reader [%p]", reader);
+			_DBG("reader [%p]", reader);
 
 			reader->openSession(testOpenSessionCallback, userData);
 		}
 		else
 		{
-			SCARD_DEBUG_ERR("reader is empty");
+			_ERR("reader is empty");
 		}
 	}
 	else
 	{
-		SCARD_DEBUG_ERR("service is NULL");
+		_ERR("service is NULL");
 	}
 
-	SCARD_END();
+	_END();
 }
 
 int main(int argv, char *args[])
 {
-	SEService *service = new SEService((void *)&user_context, &testEventHandler);
+	SEService *service = NULL;
 
-	loop = g_main_new(TRUE);
-	g_main_loop_run(loop);
+	try
+	{
+		service = new SEService((void *)&user_context, &testEventHandler);
+	}
+	catch (...)
+	{
+		_ERR("exception raised!!!");
+	}
 
 	if (service != NULL)
-		delete service;
+	{
+		loop = g_main_new(TRUE);
+		g_main_loop_run(loop);
+
+		if (service != NULL)
+			delete service;
+	}
 
 	return 0;
 }

@@ -1,19 +1,18 @@
 /*
-* Copyright (c) 2012 Samsung Electronics Co., Ltd All Rights Reserved
-*
-* Licensed under the Apache License, Version 2.0 (the "License");
-* you may not use this file except in compliance with the License.
-* You may obtain a copy of the License at
-*
-* http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific language governing permissions and
-* limitations under the License.
-*/
-
+ * Copyright (c) 2012, 2013 Samsung Electronics Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 /* standard library header */
 #include <stdio.h>
@@ -30,7 +29,16 @@
 #include "TerminalInterface.h"
 #include "APDUHelper.h"
 #include "SignatureHelper.h"
-#include "GPSEACL.h"
+#include "GPACE.h"
+#include "PKCS15.h"
+#include "ServerGDBus.h"
+#include "smartcard-daemon.h"
+
+#ifndef EXTERN_API
+#define EXTERN_API __attribute__((visibility("default")))
+#endif
+
+using namespace std;
 
 namespace smartcard_service_api
 {
@@ -58,14 +66,14 @@ namespace smartcard_service_api
 			while (!result.second);
 		}
 
-		SCARD_DEBUG("assign handle : newHandle [%d]", newHandle);
+		_DBG("assign handle : newHandle [%d]", newHandle);
 
 		return newHandle;
 	}
 
 	void IntegerHandle::releaseHandle(unsigned int handle)
 	{
-		SCARD_DEBUG("will be released : Handle [%d]", handle);
+		_DBG("will be released : Handle [%d]", handle);
 
 		SCOPE_LOCK(mutexLock)
 		{
@@ -75,17 +83,10 @@ namespace smartcard_service_api
 
 #define OMAPI_SE_PATH "/usr/lib/se"
 
-	ServerResource::ServerResource()
+	ServerResource::ServerResource() : seLoaded(false)
 	{
-		SCARD_BEGIN();
-
-		serverIPC = ServerIPC::getInstance();
-		serverDispatcher = ServerDispatcher::getInstance();
-
-#if 1
-		loadSecureElements();
-#endif
-		SCARD_END();
+		_BEGIN();
+		_END();
 	}
 
 	ServerResource::~ServerResource()
@@ -99,37 +100,37 @@ namespace smartcard_service_api
 		return serverResource;
 	}
 
-	bool ServerResource::createClient(void *ioChannel, int socket, int watchID, int state, int pid)
+	bool ServerResource::createClient(const char *name, pid_t pid)
 	{
 		bool result = false;
 
-		if (getClient(socket) == NULL)
+		if (getClient(name) == NULL)
 		{
-			ClientInstance *instance = new ClientInstance(ioChannel, socket, watchID, state, pid);
+			ClientInstance *instance = new ClientInstance(name, pid);
 			if (instance != NULL)
 			{
-				mapClients.insert(make_pair(socket, instance));
+				mapClients.insert(make_pair(name, instance));
 				result = true;
 			}
 			else
 			{
-				SCARD_DEBUG_ERR("alloc failed");
+				_ERR("alloc failed");
 			}
 		}
 		else
 		{
-			SCARD_DEBUG_ERR("client already exist [%d]", socket);
+			_ERR("client already exist, name [%s]", name);
 		}
 
 		return result;
 	}
 
-	ClientInstance *ServerResource::getClient(int socket)
+	ClientInstance *ServerResource::getClient(const char *name)
 	{
 		ClientInstance *result = NULL;
-		map<int, ClientInstance *>::iterator item;
+		map<string, ClientInstance *>::iterator item;
 
-		if ((item = mapClients.find(socket)) != mapClients.end())
+		if ((item = mapClients.find(name)) != mapClients.end())
 		{
 			result = item->second;
 		}
@@ -137,110 +138,285 @@ namespace smartcard_service_api
 		return result;
 	}
 
-	void ServerResource::setPID(int socket, int pid)
+	void ServerResource::removeClient(const char *name)
 	{
-		map<int, ClientInstance *>::iterator item;
+		map<string, ClientInstance *>::iterator item;
 
-		if ((item = mapClients.find(socket)) != mapClients.end())
+		if ((item = mapClients.find(name)) != mapClients.end())
 		{
-			if (item->second->getPID() < 0)
-				item->second->setPID(pid);
-		}
-	}
-
-	void ServerResource::removeClient(int socket)
-	{
-		map<int, ClientInstance *>::iterator item;
-
-		if ((item = mapClients.find(socket)) != mapClients.end())
-		{
-			ServerIPC::getInstance()->releaseClient(item->second->getIOChannel(), item->second->getSocket(), item->second->getWatchID());
-
 			delete item->second;
 			mapClients.erase(item);
 		}
 		else
 		{
-			SCARD_DEBUG("client exists already [%d]", socket);
+			_DBG("client removed already, name [%s]", name);
 		}
 	}
 
 	void ServerResource::removeClients()
 	{
-		map<int, ClientInstance *>::iterator item;
+		map<string, ClientInstance *>::iterator item;
 
 		for (item = mapClients.begin(); item != mapClients.end(); item++)
 		{
-			ServerIPC::getInstance()->releaseClient(item->second->getIOChannel(), item->second->getSocket(), item->second->getWatchID());
-
 			delete item->second;
 		}
 
 		mapClients.clear();
 	}
 
-	bool ServerResource::createService(int socket, unsigned int context)
+	int ServerResource::getClientCount() const
 	{
-		bool result = false;
-		ClientInstance *instance = NULL;
-
-		if ((instance = getClient(socket)) != NULL)
-		{
-			if ((result = instance->createService(context)) == false)
-			{
-				SCARD_DEBUG_ERR("ClientInstance::createService failed [%d] [%d]", socket, context);
-			}
-		}
-		else
-		{
-			SCARD_DEBUG_ERR("client doesn't exist [%d]", socket);
-		}
-
-		return result;
+		return (int)mapClients.size();
 	}
 
-	ServiceInstance *ServerResource::getService(int socket, unsigned int context)
+	ServiceInstance *ServerResource::createService(const char *name)
 	{
 		ServiceInstance *result = NULL;
 		ClientInstance *instance = NULL;
 
-		if ((instance = getClient(socket)) != NULL)
+		if ((instance = getClient(name)) != NULL)
 		{
-			result = instance->getService(context);
+			if ((result = instance->createService()) == NULL)
+			{
+				_ERR("ClientInstance::createService failed [%d]", name);
+			}
 		}
 		else
 		{
-			SCARD_DEBUG_ERR("client doesn't exist [%d]", socket);
+			_ERR("client doesn't exist, name [%s]", name);
 		}
 
 		return result;
 	}
 
-	void ServerResource::removeService(int socket, unsigned int context)
+	ServiceInstance *ServerResource::getService(const char *name, unsigned int handle)
 	{
+		ServiceInstance *result = NULL;
 		ClientInstance *instance = NULL;
 
-		if ((instance = getClient(socket)) != NULL)
+		if ((instance = getClient(name)) != NULL)
 		{
-			instance->removeService(context);
+			result = instance->getService(handle);
 		}
 		else
 		{
-			SCARD_DEBUG_ERR("client doesn't exist [%d]", socket);
+			_ERR("client doesn't exist, name [%s]", name);
+		}
+
+		return result;
+	}
+
+	void ServerResource::removeService(const char *name, unsigned int handle)
+	{
+		ClientInstance *instance = NULL;
+
+		if ((instance = getClient(name)) != NULL)
+		{
+			instance->removeService(handle);
+			if (instance->getServiceCounts() == 0) {
+
+				/* remove client instance */
+				removeClient(name);
+			}
+		}
+		else
+		{
+			_ERR("client doesn't exist, name [%s]", name);
 		}
 	}
 
-	void ServerResource::removeServices(int socket)
+	void ServerResource::removeServices(const char *name)
 	{
 		ClientInstance *instance = NULL;
 
-		if ((instance = getClient(socket)) != NULL)
+		if ((instance = getClient(name)) != NULL)
 		{
 			instance->removeServices();
+
+			/* remove client instance */
+			removeClient(name);
 		}
 		else
 		{
-			SCARD_DEBUG_ERR("client doesn't exist [%d]", socket);
+			_ERR("client doesn't exist, name [%s]", name);
+		}
+	}
+
+	unsigned int ServerResource::createSession(const char *name, unsigned int handle, unsigned int readerID, vector<ByteArray> &certHashes, void *caller)
+	{
+		unsigned int result = -1;
+		Terminal *temp = NULL;
+		ServiceInstance *instance = NULL;
+
+		if ((instance = getService(name, handle)) != NULL)
+		{
+			if ((temp = getTerminalByReaderID(readerID)) != NULL)
+			{
+				result = instance->openSession(temp, certHashes, caller);
+			}
+		}
+		else
+		{
+			_ERR("getService doesn't exist : name [%s], handle [%d]", name, handle);
+		}
+
+		return result;
+	}
+
+	ServerSession *ServerResource::getSession(const char *name, unsigned int handle, unsigned int sessionID)
+	{
+		ServerSession *result = NULL;
+		ServiceInstance *instance = NULL;
+
+		if ((instance = getService(name, handle)) != NULL)
+		{
+			result = instance->getSession(sessionID);
+		}
+		else
+		{
+			_ERR("Session doesn't exist : name [%s], handle [%d], handle [%d]", name, handle, sessionID);
+		}
+
+		return result;
+	}
+
+	bool ServerResource::isValidSessionHandle(const char *name, unsigned int handle, unsigned int session)
+	{
+		ServiceInstance *instance = NULL;
+
+		return (((instance = getService(name, handle)) != NULL) && (instance->isVaildSessionHandle(session)));
+	}
+
+	bool ServerResource::isValidChannelHandle(const char *name, unsigned int handle, unsigned int channel)
+	{
+		ServiceInstance *instance = NULL;
+
+		return (((instance = getService(name, handle)) != NULL) && (instance->isVaildChannelHandle(channel)));
+	}
+
+	unsigned int ServerResource::getChannelCount(const char *name, unsigned int handle, unsigned int sessionID)
+	{
+		unsigned int result = -1;
+		ServiceInstance *instance = NULL;
+
+		if ((instance = getService(name, handle)) != NULL)
+		{
+			result = instance->getChannelCountBySession(sessionID);
+		}
+		else
+		{
+			_ERR("getService doesn't exist : name [%s], handle [%d]", name, handle);
+		}
+
+		return result;
+	}
+
+	void ServerResource::removeSession(const char *name, unsigned int handle, unsigned int sessionID)
+	{
+		ServiceInstance *instance = NULL;
+
+		if ((instance = getService(name, handle)) != NULL)
+		{
+			instance->closeSession(sessionID);
+		}
+		else
+		{
+			_ERR("getService doesn't exist : name [%s], handle [%d]", name, handle);
+		}
+	}
+
+	unsigned int ServerResource::createChannel(const char *name, unsigned int handle, unsigned int sessionID, int channelType, ByteArray aid)
+		throw(ExceptionBase &)
+	{
+		unsigned int result = -1;
+		ServiceInstance *service = NULL;
+
+		if ((service = getService(name, handle)) != NULL)
+		{
+			if (service->isVaildSessionHandle(sessionID) == true)
+			{
+				ServerSession *session = NULL;
+				Terminal *terminal = NULL;
+
+				terminal = service->getTerminal(sessionID);
+				session = service->getSession(sessionID);
+				if (terminal != NULL && session != NULL)
+				{
+					if (terminal->open() == true) {
+						result = _createChannel(terminal, service, channelType, sessionID, aid);
+						if (result == IntegerHandle::INVALID_HANDLE)
+						{
+							_ERR("create channel failed [%d]", sessionID);
+
+							terminal->close();
+						}
+					} else {
+						_ERR("terminal open failed");
+						throw ExceptionBase(SCARD_ERROR_UNAVAILABLE);
+					}
+				}
+				else
+				{
+					_ERR("session is invalid [%d]", sessionID);
+					throw ExceptionBase(SCARD_ERROR_UNAVAILABLE);
+				}
+			}
+			else
+			{
+				_ERR("session is invalid [%d]", sessionID);
+				throw ExceptionBase(SCARD_ERROR_ILLEGAL_STATE);
+			}
+		}
+		else
+		{
+			_ERR("getService is failed, name [%s], handle [%d]", name, handle);
+			throw ExceptionBase(SCARD_ERROR_UNAVAILABLE);
+		}
+
+		return result;
+	}
+
+	Channel *ServerResource::getChannel(const char *name, unsigned int handle, unsigned int channelID)
+	{
+		Channel *result = NULL;
+		ServiceInstance *instance = NULL;
+
+		if ((instance = getService(name, handle)) != NULL)
+		{
+			result = instance->getChannel(channelID);
+		}
+		else
+		{
+			_ERR("Channel doesn't exist : name [%s], handle [%d], handle [%d]", name, handle, channelID);
+		}
+
+		return result;
+	}
+
+	void ServerResource::removeChannel(const char *name, unsigned int handle, unsigned int channelID)
+	{
+		ServiceInstance *instance = NULL;
+
+		if ((instance = getService(name, handle)) != NULL)
+		{
+			ServerChannel *channel;
+			Terminal *terminal = NULL;
+
+			channel = instance->getChannel(channelID);
+			if (channel != NULL) {
+				terminal = channel->getTerminal();
+			}
+
+			instance->closeChannel(channelID);
+
+			if (terminal != NULL) {
+				terminal->close();
+			}
+		}
+		else
+		{
+			_ERR("getService doesn't exist : name [%s], handle [%d]", name, handle);
 		}
 	}
 
@@ -255,7 +431,24 @@ namespace smartcard_service_api
 		}
 		else
 		{
-			SCARD_DEBUG_ERR("Terminal doesn't exist [%d]", terminalID);
+			_ERR("Terminal doesn't exist [%d]", terminalID);
+		}
+
+		return result;
+	}
+
+	const Terminal *ServerResource::getTerminal(unsigned int terminalID) const
+	{
+		const Terminal *result = NULL;
+		map<unsigned int, Terminal *>::const_iterator item;
+
+		if ((item = mapTerminals.find(terminalID)) != mapTerminals.end())
+		{
+			result = item->second;
+		}
+		else
+		{
+			_ERR("Terminal doesn't exist [%d]", terminalID);
 		}
 
 		return result;
@@ -278,242 +471,301 @@ namespace smartcard_service_api
 		return result;
 	}
 
-	unsigned int ServerResource::createSession(int socket, unsigned int context, unsigned int terminalID, ByteArray packageCert, void *caller)
+	Terminal *ServerResource::getTerminalByReaderID(unsigned int readerID)
 	{
-		unsigned int result = -1;
-		Terminal *temp = NULL;
-		ServiceInstance *instance = NULL;
+		Terminal *result = NULL;
+		map<unsigned int, unsigned int>::iterator item;
 
-		if ((instance = getService(socket, context)) != NULL)
+		if ((item = mapReaders.find(readerID)) != mapReaders.end())
 		{
-			if ((temp = getTerminal(terminalID)) != NULL)
+			result = getTerminal(item->second);
+		}
+		else
+		{
+			_ERR("Terminal doesn't exist, reader ID [%d]", readerID);
+		}
+
+		return result;
+	}
+
+	const Terminal *ServerResource::getTerminalByReaderID(unsigned int readerID) const
+	{
+		const Terminal *result = NULL;
+		map<unsigned int, unsigned int>::const_iterator item;
+
+		if ((item = mapReaders.find(readerID)) != mapReaders.end())
+		{
+			result = getTerminal(item->second);
+		}
+		else
+		{
+			_ERR("Terminal doesn't exist, reader ID [%d]", readerID);
+		}
+
+		return result;
+	}
+
+	unsigned int ServerResource::getTerminalID(const char *name) const
+	{
+		unsigned int result = IntegerHandle::INVALID_HANDLE;
+		map<unsigned int, Terminal *>::const_iterator item;
+
+		for (item = mapTerminals.begin();
+			item != mapTerminals.end(); item++)
+		{
+			if (strncmp(name, item->second->getName(),
+				strlen(name)) == 0)
 			{
-				result = instance->openSession(temp, packageCert, caller);
+				result = item->first;
+				break;
 			}
 		}
-		else
-		{
-			SCARD_DEBUG_ERR("getService doesn't exist : socket [%d], context [%d]", socket, context);
-		}
 
 		return result;
 	}
 
-	ServerSession *ServerResource::getSession(int socket, unsigned int context, unsigned int sessionID)
+	bool ServerResource::_isAuthorizedAccess(ServerChannel *channel,
+		const ByteArray &aid, const vector<ByteArray> &hashes)
 	{
-		ServerSession *result = NULL;
-		ServiceInstance *instance = NULL;
+		bool result = false;
+		AccessControlList *acList = NULL;
 
-		if ((instance = getService(socket, context)) != NULL)
+		/* request open channel sequence */
+		if ((acList = getAccessControlList(channel)) == NULL)
 		{
-			result = instance->getSession(sessionID);
-		}
-		else
-		{
-			SCARD_DEBUG_ERR("Session doesn't exist : socket [%d], context [%d], handle [%d]", socket, context, sessionID);
-		}
-
-		return result;
-	}
-
-	unsigned int ServerResource::getChannelCount(int socket, unsigned int context, unsigned int sessionID)
-	{
-		unsigned int result = -1;
-		ServiceInstance *instance = NULL;
-
-		if ((instance = getService(socket, context)) != NULL)
-		{
-			result = instance->getChannelCountBySession(sessionID);
-		}
-		else
-		{
-			SCARD_DEBUG_ERR("getService doesn't exist : socket [%d], context [%d]", socket, context);
-		}
-
-		return result;
-	}
-
-	void ServerResource::removeSession(int socket, unsigned int context, unsigned int sessionID)
-	{
-		ServiceInstance *instance = NULL;
-
-		if ((instance = getService(socket, context)) != NULL)
-		{
-			instance->closeSession(sessionID);
-		}
-		else
-		{
-			SCARD_DEBUG_ERR("getService doesn't exist : socket [%d], context [%d]", socket, context);
-		}
-	}
-
-	unsigned int ServerResource::createChannel(int socket, unsigned int context, unsigned int sessionID, int channelType, ByteArray aid)
-	{
-		unsigned int result = -1;
-		ServiceInstance *client = NULL;
-
-		if ((client = getService(socket, context)) != NULL)
-		{
-			if (client->isVaildSessionHandle(sessionID) == true)
+			/* load access control defined by Global Platform */
+			GPACE *acl = new GPACE();
+			if (acl != NULL)
 			{
-				AccessControlList *acList = NULL;
-				ServerSession *session = NULL;
-				Terminal *terminal = NULL;
+				int ret;
 
-				terminal = client->getTerminal(sessionID);
-				session = client->getSession(sessionID);
-				if (terminal != NULL && session != NULL)
+				ret = acl->loadACL(channel);
+				if (ret >= SCARD_ERROR_OK)
 				{
-					int rv = 0;
-					int channelNum = 0;
-					ByteArray certHash;
-					ByteArray selectResponse;
-					ByteArray command;
-					char filename[1024] = { 0, };
-
-					/* check exceptional case */
-					SignatureHelper::getProcessName(client->getParent()->getPID(), filename, sizeof(filename));
-					if (strncmp(filename, "ozD3Dw1MZruTDKHWGgYaDib2B2LV4/nfT+8b/g1Vsk8=", sizeof(filename)) != 0)
-					{
-#if 1
-						certHash = session->packageCert;
-#else
-						certHash = client->getParent()->getCertificationHash();
-#endif
-						/* request open channel sequence */
-						if ((acList = getAccessControlList(terminal)) == NULL)
-						{
-							SCARD_DEBUG_ERR("acList is null");
-
-							return result;
-						}
-
-						if (acList->isAuthorizedAccess(aid, certHash) == false)
-						{
-							SCARD_DEBUG_ERR("unauthorized access, aid %s, hash %s", aid.toString(), certHash.toString());
-
-							return result;
-						}
-					}
-
-					if (channelType == 1)
-					{
-						ByteArray response;
-
-						/* open channel */
-						command = APDUHelper::generateAPDU(APDUHelper::COMMAND_OPEN_LOGICAL_CHANNEL, 0, ByteArray::EMPTY);
-						rv = terminal->transmitSync(command, response);
-
-						if (rv == 0 && response.getLength() >= 2)
-						{
-							ResponseHelper resp(response);
-
-							if (resp.getStatus() == 0)
-							{
-								channelNum = resp.getDataField()[0];
-
-								SCARD_DEBUG("channelNum [%d]", channelNum);
-							}
-							else
-							{
-								SCARD_DEBUG_ERR("status word [%d][ 0x%02X 0x%02X ]", resp.getStatus(), response[response.getLength() - 2], response[response.getLength() - 1]);
-
-								return result;
-							}
-						}
-						else
-						{
-							SCARD_DEBUG_ERR("select apdu is failed, rv [%d], length [%d]", rv, response.getLength());
-
-							return result;
-						}
-					}
-
-					/* select aid */
-					command = APDUHelper::generateAPDU(APDUHelper::COMMAND_SELECT_BY_DF_NAME, channelNum, aid);
-					rv = terminal->transmitSync(command, selectResponse);
-					if (rv == 0 && selectResponse.getLength() >= 2)
-					{
-						ResponseHelper resp(selectResponse);
-
-						if (resp.getStatus() == 0)
-						{
-							result = client->openChannel(sessionID, channelNum);
-							if (result != IntegerHandle::INVALID_HANDLE)
-							{
-								ServerChannel *temp = (ServerChannel *)client->getChannel(result);
-								if (temp != NULL)
-								{
-									/* set select response */
-									temp->selectResponse = selectResponse;
-								}
-								else
-								{
-									SCARD_DEBUG_ERR("IS IT POSSIBLE??????????????????");
-								}
-							}
-							else
-							{
-								SCARD_DEBUG_ERR("channel is null.");
-							}
-						}
-						else
-						{
-							SCARD_DEBUG_ERR("status word [%d][ 0x%02X 0x%02X ]", resp.getStatus(), selectResponse[selectResponse.getLength() - 2], selectResponse[selectResponse.getLength() - 1]);
-						}
-					}
-					else
-					{
-						SCARD_DEBUG_ERR("select apdu is failed, rv [%d], length [%d]", rv, selectResponse.getLength());
-					}
-
+					acList = acl;
+					addAccessControlList(channel, acList);
 				}
 				else
 				{
-					SCARD_DEBUG_ERR("session is invalid [%d]", sessionID);
+					_ERR("unknown error, 0x%x", -ret);
+					delete acl;
 				}
 			}
 			else
 			{
-				SCARD_DEBUG_ERR("session is invalid [%d]", sessionID);
+				_ERR("alloc failed");
 			}
 		}
 		else
 		{
-			SCARD_DEBUG_ERR("getClient is failed [%d] [%d]", socket, context);
+			acList->loadACL(channel);
+		}
+
+		if (acList != NULL)
+		{
+			result = acList->isAuthorizedAccess(aid, hashes);
 		}
 
 		return result;
 	}
 
-	Channel *ServerResource::getChannel(int socket, unsigned int context, unsigned int channelID)
+	int ServerResource::_openLogicalChannel(Terminal *terminal)
 	{
-		Channel *result = NULL;
-		ServiceInstance *instance = NULL;
+		int result = -1;
+		int rv = 0;
+		ByteArray command;
+		ByteArray response;
 
-		if ((instance = getService(socket, context)) != NULL)
+		/* open channel */
+		command = APDUHelper::generateAPDU(APDUHelper::COMMAND_OPEN_LOGICAL_CHANNEL, 0, ByteArray::EMPTY);
+
+		_DBG("command [%d] : %s", command.size(), command.toString().c_str());
+
+		rv = terminal->transmitSync(command, response);
+		if (rv == 0 && response.size() >= 2)
 		{
-			result = instance->getChannel(channelID);
+			ResponseHelper resp(response);
+
+			if (resp.getStatus() >= 0)
+			{
+				result = resp.getDataField()[0];
+			}
+			else
+			{
+				result = resp.getStatus();
+			}
 		}
 		else
 		{
-			SCARD_DEBUG_ERR("Channel doesn't exist : socket [%d], context [%d], handle [%d]", socket, context, channelID);
+			_ERR("transmitSync failed, rv [%d], length [%d]", rv, response.size());
 		}
 
 		return result;
 	}
 
-	void ServerResource::removeChannel(int socket, unsigned int context, unsigned int channelID)
+	int ServerResource::_closeLogicalChannel(Terminal *terminal, int channelNum)
 	{
-		ServiceInstance *instance = NULL;
+		int result = SCARD_ERROR_UNKNOWN;
+		int rv = 0;
+		ByteArray command;
+		ByteArray response;
 
-		if ((instance = getService(socket, context)) != NULL)
+		/* open channel */
+		command = APDUHelper::generateAPDU(APDUHelper::COMMAND_CLOSE_LOGICAL_CHANNEL, channelNum, ByteArray::EMPTY);
+
+		_DBG("command [%d] : %s", command.size(), command.toString().c_str());
+
+		rv = terminal->transmitSync(command, response);
+		if (rv == 0 && response.size() >= 2)
 		{
-			instance->closeChannel(channelID);
+			ResponseHelper resp(response);
+
+			if (resp.getStatus() >= 0)
+			{
+				_DBG("channel closed [%d]", channelNum);
+				result = SCARD_ERROR_OK;
+			}
+			else
+			{
+				_ERR("status word [ %02X %02X ]", resp.getSW1(), resp.getSW2());
+			}
 		}
 		else
 		{
-			SCARD_DEBUG_ERR("getService doesn't exist : socket [%d], context [%d]", socket, context);
+			_ERR("select apdu is failed, rv [%d], length [%d]", rv, response.size());
+		}
+
+		return result;
+	}
+
+	unsigned int ServerResource::_createChannel(Terminal *terminal,
+		ServiceInstance *service, int channelType,
+		unsigned int sessionID, const ByteArray &aid)
+		throw(ExceptionBase &)
+	{
+		unsigned int result = IntegerHandle::INVALID_HANDLE;
+		int channelNum = 0;
+		ServerChannel *channel = NULL;
+
+		/* open logical channel */
+		if (channelType == 1)
+		{
+			channelNum = _openLogicalChannel(terminal);
+			if (channelNum > 0)
+			{
+				_DBG("channelNum [%d]", channelNum);
+			}
+			else
+			{
+				_ERR("_openLogicalChannel failed [%d]", channelNum);
+				throw ExceptionBase(SCARD_ERROR_NOT_ENOUGH_RESOURCE);
+			}
+		}
+
+		/* create channel instance */
+		result = service->openChannel(sessionID, channelNum, ByteArray::EMPTY);
+		if (result == IntegerHandle::INVALID_HANDLE)
+		{
+			_ERR("channel is null.");
+
+			/* close logical channel */
+			if (channelNum > 0)
+			{
+				_closeLogicalChannel(terminal, channelNum);
+			}
+			throw ExceptionBase(SCARD_ERROR_OUT_OF_MEMORY);
+		}
+
+		channel = service->getChannel(result);
+		if(channel == NULL)
+		{
+			_ERR("channel is null.");
+
+			 throw ExceptionBase(SCARD_ERROR_OUT_OF_MEMORY);
+		}
+
+		/* check */
+		if (_isAuthorizedAccess(channel, aid,
+			service->getParent()->getCertificationHashes()) == true)
+		{
+			int rv = 0;
+
+			/* select aid */
+			if (aid == PKCS15::PKCS15_AID)
+			{
+				PKCS15 pkcs15(channel);
+
+				rv = pkcs15.select();
+				if (rv >= SCARD_ERROR_OK)
+				{
+					/* remove privilege mode */
+					channel->unsetPrivilegeMode();
+					channel->setSelectResponse(pkcs15.getSelectResponse());
+				}
+				else
+				{
+					_ERR("select failed, [%x]", -rv);
+
+					service->closeChannel(result);
+					throw ExceptionBase(SCARD_ERROR_IO_FAILED);
+				}
+			}
+			else
+			{
+				FileObject file(channel);
+
+				rv = file.select(aid);
+				if (rv >= SCARD_ERROR_OK)
+				{
+					/* remove privilege mode */
+					channel->unsetPrivilegeMode();
+					channel->setSelectResponse(file.getSelectResponse());
+				}
+				else
+				{
+					_ERR("select failed [%x]", -rv);
+
+					service->closeChannel(result);
+					throw ExceptionBase(SCARD_ERROR_IO_FAILED);
+				}
+			}
+		}
+		else
+		{
+			_ERR("unauthorized access");
+
+			service->closeChannel(result);
+			throw ExceptionBase(SCARD_ERROR_SECURITY_NOT_ALLOWED);
+		}
+
+		return result;
+	}
+
+	void ServerResource::addAccessControlList(Terminal *terminal, AccessControlList *acl)
+	{
+		map<Terminal *, AccessControlList *>::iterator item;
+
+		if ((item = mapACL.find(terminal)) == mapACL.end())
+		{
+			mapACL.insert(make_pair(terminal, acl));
+		}
+		else
+		{
+			item->second = acl;
+		}
+	}
+
+	void ServerResource::addAccessControlList(ServerChannel *channel, AccessControlList *acl)
+	{
+		map<Terminal *, AccessControlList *>::iterator item;
+
+		if ((item = mapACL.find(channel->getTerminal())) == mapACL.end())
+		{
+			mapACL.insert(make_pair(channel->getTerminal(), acl));
+		}
+		else
+		{
+			item->second = acl;
 		}
 	}
 
@@ -522,30 +774,20 @@ namespace smartcard_service_api
 		AccessControlList *result = NULL;
 		map<Terminal *, AccessControlList *>::iterator item;
 
-		if ((item = mapACL.find(terminal)) == mapACL.end())
+		if ((item = mapACL.find(terminal)) != mapACL.end())
 		{
-			ServerChannel *channel = new ServerChannel(NULL, NULL, 0, terminal);
-			if (channel != NULL)
-			{
-				/* load access control */
-				result = new GPSEACL(channel);
-				if (result != NULL)
-				{
-					result->loadACL();
-
-					mapACL.insert(make_pair(terminal, result));
-				}
-				else
-				{
-					SCARD_DEBUG_ERR("alloc failed");
-				}
-			}
-			else
-			{
-				SCARD_DEBUG_ERR("alloc failed");
-			}
+			result = item->second;
 		}
-		else
+
+		return result;
+	}
+
+	AccessControlList *ServerResource::getAccessControlList(ServerChannel *channel)
+	{
+		AccessControlList *result = NULL;
+		map<Terminal *, AccessControlList *>::iterator item;
+
+		if ((item = mapACL.find(channel->getTerminal())) != mapACL.end())
 		{
 			result = item->second;
 		}
@@ -565,16 +807,16 @@ namespace smartcard_service_api
 			terminal = (Terminal *)createInstance();
 			if (terminal != NULL)
 			{
-				SCARD_DEBUG("terminal [%p]", terminal);
+				_DBG("terminal [%p]", terminal);
 			}
 			else
 			{
-				SCARD_DEBUG_ERR("terminal is null");
+				_ERR("terminal is null");
 			}
 		}
 		else
 		{
-			SCARD_DEBUG_ERR("create_instance is null [%d]", errno);
+			_ERR("create_instance is null [%d]", errno);
 		}
 
 		return terminal;
@@ -600,20 +842,25 @@ namespace smartcard_service_api
 
 				terminal->setStatusCallback(&ServerResource::terminalCallback);
 
-				SCARD_DEBUG("register success [%s] [%p] [%s] [%p]", library, libHandle, terminal->getName(), terminal);
+				_DBG("register success [%s] [%p] [%s] [%p]", library, libHandle, terminal->getName(), terminal);
+
+				if (terminal->isSecureElementPresence() == true)
+				{
+					createReader(handle);
+				}
 
 				result = true;
 			}
 			else
 			{
-				SCARD_DEBUG_ERR("terminal is null [%s]", library);
+				_ERR("terminal is null [%s]", library);
 
 				dlclose(libHandle);
 			}
 		}
 		else
 		{
-			SCARD_DEBUG_ERR("it is not se file [%s] [%d]", library, errno);
+			_ERR("it is not se file [%s] [%d]", library, errno);
 		}
 
 		return result;
@@ -621,39 +868,41 @@ namespace smartcard_service_api
 
 	int ServerResource::loadSecureElements()
 	{
-		int result;
-		void *libHandle;
-		DIR *dir = NULL;
-		struct dirent *entry = NULL;
+		int result = 0;
 
-		if ((dir = opendir(OMAPI_SE_PATH)) != NULL)
+		if (seLoaded == false)
 		{
-			while ((entry = readdir(dir)) != NULL)
+			DIR *dir;
+			struct dirent *entry;
+
+			if ((dir = opendir(OMAPI_SE_PATH)) != NULL)
 			{
-				if (strncmp(entry->d_name, ".", 1) != 0 && strncmp(entry->d_name, "..", 2) != 0)
+				while ((entry = readdir(dir)) != NULL)
 				{
-					char fullPath[1024] = { 0, };
+					if (strncmp(entry->d_name, ".", 1) != 0 &&
+						strncmp(entry->d_name, "..", 2) != 0)
+					{
+						char fullPath[1024];
+						/* TODO : need additional name rule :) */
 
-					/* TODO : need additional name rule :) */
+						/* append each files */
+						snprintf(fullPath, sizeof(fullPath),
+							"%s/%s", OMAPI_SE_PATH, entry->d_name);
 
-					/* open each files */
-					libHandle = NULL;
+						SECURE_LOGD("se name [%s]", fullPath);
 
-					snprintf(fullPath, sizeof(fullPath), "%s/%s", OMAPI_SE_PATH, entry->d_name);
-
-					SCARD_DEBUG("se name [%s]", fullPath);
-
-					result = appendSELibrary(fullPath);
+						result = appendSELibrary(fullPath);
+					}
 				}
+
+				closedir(dir);
+
+				seLoaded = true;
 			}
-
-			closedir(dir);
-
-			result = 0;
-		}
-		else
-		{
-			result = -1;
+			else
+			{
+				result = -1;
+			}
 		}
 
 		return result;
@@ -661,40 +910,58 @@ namespace smartcard_service_api
 
 	void ServerResource::unloadSecureElements()
 	{
-		size_t i;
-		map<unsigned int, Terminal *>::iterator item;
-
-		for (item = mapTerminals.begin(); item != mapTerminals.end(); item++)
+		if (seLoaded == true)
 		{
-			item->second->finalize();
+			size_t i;
+			map<unsigned int, Terminal *>::iterator item;
 
-			IntegerHandle::releaseHandle(item->first);
+			for (item = mapTerminals.begin(); item != mapTerminals.end(); item++)
+			{
+				item->second->finalize();
+
+				IntegerHandle::releaseHandle(item->first);
+			}
+
+			mapTerminals.clear();
+
+			for (i = 0; i < libraries.size(); i++)
+			{
+				if (libraries[i] != NULL)
+					dlclose(libraries[i]);
+			}
+
+			libraries.clear();
+
+			seLoaded = false;
 		}
+	}
 
-		mapTerminals.clear();
+	bool ServerResource::isValidReaderHandle(unsigned int reader) const
+	{
+		return (getTerminalByReaderID(reader) != NULL);
+	}
 
-		for (i = 0; i < libraries.size(); i++)
+	void ServerResource::getReaders(vector<pair<unsigned int, string> > &readers) const
+	{
+		const Terminal *terminal;
+		map<unsigned int, unsigned int>::const_iterator item;
+
+		readers.clear();
+
+		for (item = mapReaders.begin(); item != mapReaders.end(); item++)
 		{
-			if (libraries[i] != NULL)
-				dlclose(libraries[i]);
+			if (item->second != IntegerHandle::INVALID_HANDLE)
+			{
+				terminal = getTerminal(item->second);
+				if (terminal != NULL && terminal->isSecureElementPresence() == true)
+				{
+					readers.push_back(make_pair(item->first, terminal->getName()));
+				}
+			}
 		}
-
-		libraries.clear();
 	}
 
-	bool ServerResource::isValidReaderHandle(unsigned int reader)
-	{
-		return (getTerminal(reader) != NULL);
-	}
-
-	bool ServerResource::isValidSessionHandle(int socket, unsigned int context, unsigned int session)
-	{
-		ServiceInstance *instance = NULL;
-
-		return (((instance = getService(socket, context)) != NULL) && (getService(socket, context)->isVaildSessionHandle(session)));
-	}
-
-	int ServerResource::getReadersInformation(ByteArray &info)
+	int ServerResource::getReadersInformation(ByteArray &info) const
 	{
 		int result = 0;
 		unsigned char *buffer = NULL;
@@ -702,16 +969,24 @@ namespace smartcard_service_api
 		unsigned int offset = 0;
 		unsigned int nameLen = 0;
 
-		if (mapTerminals.size() > 0)
+		if (mapReaders.size() > 0)
 		{
-			map<unsigned int, Terminal *>::iterator item;
+			const Terminal *terminal = NULL;
+			map<unsigned int, unsigned int>::const_iterator item;
 
-			for (item = mapTerminals.begin(); item != mapTerminals.end(); item++)
+			for (item = mapReaders.begin(); item != mapReaders.end(); item++)
 			{
-				if (item->second->isSecureElementPresence())
+				if (item->second != IntegerHandle::INVALID_HANDLE)
 				{
-					length += sizeof(nameLen) + strlen(item->second->getName()) + sizeof(unsigned int);
-					result++;
+					terminal = getTerminal(item->second);
+					if (terminal != NULL)
+					{
+						if (terminal->isSecureElementPresence())
+						{
+							length += sizeof(nameLen) + strlen(terminal->getName()) + sizeof(unsigned int);
+							result++;
+						}
+					}
 				}
 			}
 
@@ -720,97 +995,271 @@ namespace smartcard_service_api
 			{
 				memset(buffer, 0, length);
 
-				for (item = mapTerminals.begin(); item != mapTerminals.end(); item++)
+				for (item = mapReaders.begin(); item != mapReaders.end(); item++)
 				{
-					if (item->second->isSecureElementPresence())
+					if (item->second != IntegerHandle::INVALID_HANDLE)
 					{
-						nameLen = strlen(item->second->getName());
+						terminal = getTerminal(item->second);
+						if (terminal != NULL)
+						{
+							if (terminal->isSecureElementPresence())
+							{
+								nameLen = strlen(terminal->getName());
 
-						memcpy(buffer + offset, &nameLen, sizeof(nameLen));
-						offset += sizeof(nameLen);
+								memcpy(buffer + offset, &nameLen, sizeof(nameLen));
+								offset += sizeof(nameLen);
 
-						memcpy(buffer + offset, item->second->getName(), nameLen);
-						offset += nameLen;
+								memcpy(buffer + offset, terminal->getName(), nameLen);
+								offset += nameLen;
 
-						memcpy(buffer + offset, &item->first, sizeof(unsigned int));
-						offset += sizeof(unsigned int);
+								memcpy(buffer + offset, &item->first, sizeof(unsigned int));
+								offset += sizeof(unsigned int);
+							}
+						}
 					}
 				}
 
-				info.setBuffer(buffer, length);
+				info.assign(buffer, length);
 				delete []buffer;
 			}
 			else
 			{
-				SCARD_DEBUG_ERR("alloc failed");
+				_ERR("alloc failed");
 				result = -1;
 			}
 		}
 		else
 		{
-			SCARD_DEBUG("no secure element");
+			_INFO("no secure element");
 		}
 
 		return result;
 	}
 
-	bool ServerResource::sendMessageToAllClients(Message &msg)
+	void ServerResource::terminalCallback(const void *terminal, int event,
+		int error, void *user_param)
 	{
-		bool result = true;
-		map<int, ClientInstance *>::iterator item;
-
-		for (item = mapClients.begin(); item != mapClients.end(); item++)
-		{
-			if (item->second->sendMessageToAllServices(item->second->getSocket(), msg) == false)
-				result = false;
-		}
-
-		return result;
-	}
-
-	void ServerResource::terminalCallback(void *terminal, int event, int error, void *user_param)
-	{
-		SCARD_BEGIN();
+		_DBG("terminal [%s], event [%d], error [%d], user_param [%p]", (char *)terminal, event, error, user_param);
 
 		switch (event)
 		{
 		case Terminal::NOTIFY_SE_AVAILABLE :
 			{
-				Message msg;
+				ServerResource &instance = ServerResource::getInstance();
+				unsigned int terminalID = IntegerHandle::INVALID_HANDLE;
 
-				SCARD_DEBUG("[NOTIFY_SE_AVAILABLE]");
+				_INFO("[NOTIFY_SE_AVAILABLE]");
 
-				SCARD_DEBUG("terminal [%s], event [%d], error [%d], user_param [%p]", (char *)terminal, event, error, user_param);
+				terminalID = instance.getTerminalID((char *)terminal);
+				if (terminalID != IntegerHandle::INVALID_HANDLE)
+				{
+					unsigned int readerID = instance.createReader(terminalID);
 
-				/* send all client to refresh reader */
-				msg.message = msg.MSG_NOTIFY_SE_INSERTED;
-				msg.data.setBuffer((unsigned char *)terminal, strlen((char *)terminal) + 1);
-
-				ServerResource::getInstance().sendMessageToAllClients(msg);
+					ServerGDBus::getInstance().emitReaderInserted(readerID, (const char *)terminal);
+				}
 			}
 			break;
 
 		case Terminal::NOTIFY_SE_NOT_AVAILABLE :
 			{
-				Message msg;
+				ServerResource &instance = ServerResource::getInstance();
+				unsigned int readerID = IntegerHandle::INVALID_HANDLE;
 
-				SCARD_DEBUG("[NOTIFY_SE_NOT_AVAILABLE]");
+				_INFO("[NOTIFY_SE_NOT_AVAILABLE]");
 
-				SCARD_DEBUG("terminal [%s], event [%d], error [%d], user_param [%p]", (char *)terminal, event, error, user_param);
+				readerID = instance.getReaderID((char *)terminal);
 
-				/* send all client to refresh reader */
-				msg.message = msg.MSG_NOTIFY_SE_REMOVED;
-				msg.data.setBuffer((unsigned char *)terminal, strlen((char *)terminal) + 1);
+				ServerGDBus::getInstance().emitReaderRemoved(
+					readerID, (const char *)terminal);
 
-				ServerResource::getInstance().sendMessageToAllClients(msg);
+				instance.removeReader(readerID);
 			}
 			break;
 
 		default :
+			_DBG("terminal [%s], event [%d], error [%d], user_param [%p]", (char *)terminal, event, error, user_param);
 			break;
 		}
-
-		SCARD_END();
 	}
 
+	unsigned int ServerResource::createReader(unsigned int terminalID)
+	{
+		unsigned int result = -1;
+
+		result = IntegerHandle::assignHandle();
+
+		mapReaders.insert(make_pair(result, terminalID));
+
+		return result;
+	}
+
+	unsigned int ServerResource::getReaderID(const char *name) const
+	{
+		unsigned int result = IntegerHandle::INVALID_HANDLE,
+			terminalID = IntegerHandle::INVALID_HANDLE;
+
+		terminalID = getTerminalID(name);
+		if (terminalID != IntegerHandle::INVALID_HANDLE)
+		{
+			map<unsigned int, unsigned int>::const_iterator item;
+
+			for (item = mapReaders.begin();
+				item != mapReaders.end(); item++)
+			{
+				if (item->second == terminalID)
+				{
+					result = item->first;
+					break;
+				}
+			}
+		}
+
+		return result;
+	}
+
+	void ServerResource::removeReader(unsigned int readerID)
+	{
+		map<unsigned int, unsigned int>::iterator item;
+
+		if ((item = mapReaders.find(readerID)) != mapReaders.end())
+		{
+			item->second = IntegerHandle::INVALID_HANDLE;
+		}
+	}
+
+	ServerChannel *ServerResource::createInternalChannel(Terminal *terminal,
+		int channelType)
+	{
+		int channelNum = 0;
+		ServerChannel *channel = NULL;
+
+		/* open logical channel */
+		if (channelType == 1)
+		{
+			channelNum = _openLogicalChannel(terminal);
+			if (channelNum > 0)
+			{
+				_DBG("channelNum [%d]", channelNum);
+			}
+			else
+			{
+				_ERR("_openLogicalChannel failed [%d]", channelNum);
+				throw ExceptionBase(SCARD_ERROR_NOT_ENOUGH_RESOURCE);
+			}
+		}
+
+		/* create channel instance */
+		channel = new ServerChannel(NULL, NULL, channelNum, terminal);
+
+		return channel;
+	}
+
+	bool ServerResource::isAuthorizedNFCAccess(Terminal *terminal,
+		const ByteArray &aid, const vector<ByteArray> &hashes)
+	{
+		bool result = false;
+		ServerChannel *channel;
+
+		if (terminal == NULL) {
+			return result;
+		}
+
+		channel = createInternalChannel(terminal, 1);
+		if (channel != NULL) {
+			AccessControlList *acl = getAccessControlList(channel);
+			if (acl == NULL) {
+
+				/* load access control defined by Global Platform */
+				acl = new GPACE();
+				if (acl != NULL) {
+					int ret;
+
+					ret = acl->loadACL(channel);
+					if (ret >= SCARD_ERROR_OK) {
+						addAccessControlList(channel, acl);
+					} else {
+						_ERR("unknown error, 0x%x", -ret);
+
+						delete acl;
+						acl = NULL;
+					}
+				} else {
+					_ERR("alloc failed");
+				}
+			} else {
+				acl->updateACL(channel);
+			}
+
+			if (acl != NULL) {
+				result = acl->isAuthorizedNFCAccess(aid, hashes);
+			} else {
+				_ERR("acl is null");
+			}
+
+			delete channel;
+		} else {
+			_ERR("alloc failed");
+		}
+
+		return result;
+	}
+
+	bool ServerResource::isAuthorizedAccess(Terminal *terminal,
+		const ByteArray &aid, const vector<ByteArray> &hashes)
+	{
+		bool result = false;
+		ServerChannel *channel;
+
+		if (terminal == NULL) {
+			return result;
+		}
+
+		channel = createInternalChannel(terminal, 1);
+		if (channel != NULL) {
+			AccessControlList *acl = getAccessControlList(channel);
+			if (acl == NULL) {
+
+				/* load access control defined by Global Platform */
+				acl = new GPACE();
+				if (acl != NULL) {
+					int ret;
+
+					ret = acl->loadACL(channel);
+					if (ret >= SCARD_ERROR_OK) {
+						addAccessControlList(channel, acl);
+					} else {
+						_ERR("unknown error, 0x%x", -ret);
+
+						delete acl;
+						acl = NULL;
+					}
+				} else {
+					_ERR("alloc failed");
+				}
+			} else {
+				acl->updateACL(channel);
+			}
+
+			if (acl != NULL) {
+				result = acl->isAuthorizedAccess(aid, hashes);
+			} else {
+				_ERR("acl is null");
+			}
+
+			delete channel;
+		} else {
+			_ERR("alloc failed");
+		}
+
+		return result;
+	}
+
+	void ServerResource::finish()
+	{
+		if (getClientCount() == 0) {
+			_INFO("no client connected. terminate server");
+
+			smartcard_daemon_exit();
+		}
+	}
 } /* namespace smartcard_service_api */

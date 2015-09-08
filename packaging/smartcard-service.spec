@@ -1,117 +1,207 @@
+# FOR COMMENTING DEFINITION, MUST USE %% instead of %
+%global use_autostart "-DUSE_AUTOSTART=1"
+#%%global test_client "-DTEST_CLIENT=1"
+
+################################################################################
+# package : smartcard-service                                                  #
+################################################################################
 Name:       smartcard-service
 Summary:    Smartcard Service FW
-Version:    0.1.0
-Release:    8
+Version:    0.1.41
+Release:    0
 Group:      libs
-License:    Samsung Proprietary License
+License:    Apache-2.0
 Source0:    %{name}-%{version}.tar.gz
-Source1:    smartcard-service-server.init
+%if 0%{!?use_autostart:1}
+Source1:    %{name}-server.init
+%endif
+BuildRequires: cmake
 BuildRequires: pkgconfig(glib-2.0)
-BuildRequires: pkgconfig(vconf)
+BuildRequires: pkgconfig(gio-unix-2.0)
 BuildRequires: pkgconfig(security-server)
 BuildRequires: pkgconfig(dlog)
-BuildRequires: pkgconfig(libssl)
 BuildRequires: pkgconfig(aul)
-BuildRequires: pkgconfig(dpl-wrt-dao-ro)
-BuildRequires: cmake
-BuildRequires: gettext-tools
+BuildRequires: pkgconfig(libssl)
+BuildRequires: pkgconfig(pkgmgr)
+BuildRequires: pkgconfig(pkgmgr-info)
+BuildRequires: python
+BuildRequires: python-xml
+BuildRequires: hash-signer
+
 Requires(post):   /sbin/ldconfig
-Requires(post):   /usr/bin/vconftool
-requires(postun): /sbin/ldconfig
+Requires(postun): /sbin/ldconfig
+Requires:         %{name}-common = %{version}-%{release}
+
 
 %description
 Smartcard Service FW.
 
-%prep
-%setup -q
 
-%package    devel
-Summary:    smartcard service
-Group:      Development/Libraries
-Requires:   %{name} = %{version}-%{release}
+%files
+%manifest %{name}.manifest
+%defattr(-,root,root,-)
+%{_libdir}/lib%{name}.so.*
+%{_datadir}/license/%{name}
 
-%description devel
-smartcard service.
-
-%package -n smartcard-service-common
-Summary:    common smartcard service
-Group:      Development/Libraries
-Requires:   %{name} = %{version}-%{release}
-
-%description -n smartcard-service-common
-common smartcard service.
-
-%package -n smartcard-service-common-devel
-Summary:    common smartcard service
-Group:      Development/Libraries
-Requires:   %{name} = %{version}-%{release}
-
-%description -n smartcard-service-common-devel
-common smartcard service.
-
-%package -n smartcard-service-server
-Summary:    server smartcard service
-Group:      Development/Libraries
-Requires:   %{name} = %{version}-%{release}
-
-%description -n smartcard-service-server
-smartcard service.
-
-%build
-mkdir obj-arm-limux-qnueabi
-cd obj-arm-limux-qnueabi
-cmake .. -DCMAKE_INSTALL_PREFIX=%{_prefix}
-#make %{?jobs:-j%jobs}
-
-%install
-cd obj-arm-limux-qnueabi
-%make_install
-%__mkdir -p  %{buildroot}/etc/init.d/
-%__mkdir -p  %{buildroot}/etc/rc.d/rc3.d/
-%__mkdir -p  %{buildroot}/etc/rc.d/rc5.d/
-%__cp -af %SOURCE1 %{buildroot}/etc/init.d/smartcard-service-server
-chmod 755 %{buildroot}/etc/init.d/smartcard-service-server
 
 %post
 /sbin/ldconfig
 
-ln -sf /etc/init.d/smartcard-service-server /etc/rc.d/rc3.d/S79smartcard-service-server
-ln -sf /etc/init.d/smartcard-service-server /etc/rc.d/rc5.d/S79smartcard-service-server
 
 %postun
 /sbin/ldconfig
 
-rm -f /etc/rc.d/rc3.d/S79smartcard-service-server
-rm -f /etc/rc.d/rc5.d/S79smartcard-service-server
 
-#%post
-# -n nfc-common-lib -p /sbin/ldconfig
+################################################################################
+# package : smartcard-service-devel                                            #
+################################################################################
+%package    devel
+Summary:    smartcard service devel
+Group:      Development/Libraries
+Requires:   %{name} = %{version}-%{release}
 
-#%postun
-# -n nfc-common-lib -p /sbin/ldconfig
 
-%files
-%defattr(-,root,root,-)
-/usr/lib/libsmartcard-service.so.*
+%description devel
+smartcard service.
+
 
 %files  devel
+%manifest %{name}-devel.manifest
 %defattr(-,root,root,-)
-/usr/include/smartcard-service/*
-/usr/lib/libsmartcard-service.so
-/usr/lib/pkgconfig/smartcard-service.pc
+%{_includedir}/%{name}/*
+%{_libdir}/lib%{name}.so
+%{_libdir}/pkgconfig/%{name}.pc
 
-%files -n smartcard-service-common
-%defattr(-,root,root,-)
-/usr/lib/libsmartcard-service-common.so.*
 
-%files -n smartcard-service-common-devel
-%defattr(-,root,root,-)
-/usr/include/smartcard-service-common/*
-/usr/lib/libsmartcard-service-common.so
-/usr/lib/pkgconfig/smartcard-service-common.pc
+################################################################################
+# package : smartcard-service-common                                           #
+################################################################################
+%package    common
+Summary:    common smartcard service
+Group:      Development/Libraries
 
-%files -n smartcard-service-server
+
+%description common
+common smartcard service.
+
+
+%files common
+%manifest %{name}-common.manifest
 %defattr(-,root,root,-)
-/usr/bin/smartcard-daemon
-#/usr/bin/smartcard-test-client
-/etc/init.d/smartcard-service-server
+%{_libdir}/lib%{name}-common.so.*
+%{_datadir}/license/%{name}-common
+
+
+################################################################################
+# package : smartcard-service-common-devel                                     #
+################################################################################
+%package    common-devel
+Summary:    common smartcard service
+Group:      Development/Libraries
+Requires:   %{name}-common = %{version}-%{release}
+
+
+%description common-devel
+common smartcard service.
+
+
+%files common-devel
+%manifest %{name}-common-devel.manifest
+%defattr(-,root,root,-)
+%{_includedir}/%{name}-common/*
+%{_libdir}/lib%{name}-common.so
+%{_libdir}/pkgconfig/%{name}-common.pc
+
+
+################################################################################
+# package : smartcard-service-server                                           #
+################################################################################
+%global bindir /usr/apps/%{name}-server
+
+%package          server
+Summary:          server smartcard service
+Group:            Development/Libraries
+Requires:         %{name}-common = %{version}-%{release}
+
+
+%description server
+smartcard service server
+
+
+%post server
+/usr/bin/signing-client/hash-signer-client.sh -a -d -p platform %{bindir}
+%if 0%{!?use_autostart:1}
+	ln -sf /etc/init.d/%{name}-server /etc/rc.d/rc3.d/S79%{name}-server
+	ln -sf /etc/init.d/%{name}-server /etc/rc.d/rc5.d/S79%{name}-server
+%endif
+ln -sf /usr/apps/%{name}-server/bin/smartcard-daemon /usr/bin/smartcard-daemon
+%if 0%{?test_client:1}
+	ln -sf /usr/apps/%{name}-server/bin/smartcard-test-client /usr/bin/smartcard-test-client
+%endif
+
+
+%postun server
+%if 0%{!?use_autostart:1}
+	rm -f /etc/rc.d/rc3.d/S79%{name}-server
+	rm -f /etc/rc.d/rc5.d/S79%{name}-server
+%endif
+rm -f /usr/bin/smartcard-daemon
+
+
+%files server
+%manifest %{name}-server.manifest
+%defattr(-,root,root,-)
+%{bindir}/bin/smartcard-daemon
+%{_datadir}/packages/%{name}-server.xml
+%if 0%{?test_client:1}
+	%{bindir}/bin/smartcard-test-client
+%endif
+%if 0%{?use_autostart:1}
+	%{_datadir}/dbus-1/services/org.tizen.smartcard_service.service
+%else
+	%{_sysconfdir}/init.d/%{name}-server
+%endif
+%{bindir}/%{name}-server
+%{bindir}/author-signature.xml
+%{bindir}/signature1.xml
+
+
+################################################################################
+# common...                                                                    #
+################################################################################
+%prep
+%setup -q
+
+
+%build
+%if 0%{?sec_build_binary_debug_enable}
+export CFLAGS="$CFLAGS -DTIZEN_DEBUG_ENABLE"
+export CXXFLAGS="$CXXFLAGS -DTIZEN_DEBUG_ENABLE"
+export FFLAGS="$FFLAGS -DTIZEN_DEBUG_ENABLE"
+%endif
+mkdir obj-arm-limux-qnueabi
+cd obj-arm-limux-qnueabi
+%cmake .. -DCMAKE_INSTALL_PREFIX=%{_prefix} %{?use_autostart} %{?use_gdbus} %{?test_client}
+#make %{?jobs:-j%jobs}
+
+
+%install
+cd obj-arm-limux-qnueabi
+%make_install
+%if 0%{!?use_autostart:1}
+	%__mkdir -p  %{buildroot}/etc/init.d/
+	%__mkdir -p  %{buildroot}/etc/rc.d/rc3.d/
+	%__mkdir -p  %{buildroot}/etc/rc.d/rc5.d/
+	%__cp -af %SOURCE1 %{buildroot}/etc/init.d/%{name}-server
+	chmod 755 %{buildroot}/etc/init.d/%{name}-server
+%endif
+mkdir -p %{buildroot}/usr/share/license
+cp -af %{_builddir}/%{name}-%{version}/packaging/%{name} %{buildroot}/usr/share/license/
+cp -af %{_builddir}/%{name}-%{version}/packaging/%{name}-common %{buildroot}/usr/share/license/
+cp -af %{_builddir}/%{name}-%{version}/packaging/%{name}-server %{buildroot}%{bindir}
+
+%define tizen_sign 1
+%define tizen_sign_base %{bindir}
+%define tizen_sign_level platform
+%define tizen_author_sign 1
+%define tizen_dist_sign 1

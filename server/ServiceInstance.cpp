@@ -1,19 +1,18 @@
 /*
-* Copyright (c) 2012 Samsung Electronics Co., Ltd All Rights Reserved
-*
-* Licensed under the Apache License, Version 2.0 (the "License");
-* you may not use this file except in compliance with the License.
-* You may obtain a copy of the License at
-*
-* http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific language governing permissions and
-* limitations under the License.
-*/
-
+ * Copyright (c) 2012, 2013 Samsung Electronics Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 /* standard library header */
 
@@ -27,11 +26,27 @@
 
 namespace smartcard_service_api
 {
-	unsigned int ServiceInstance::openSession(Terminal *terminal, ByteArray packageCert, void *caller)
+	ServiceInstance::ServiceInstance(ClientInstance *parent) :
+		parent(parent)
+	{
+		handle = IntegerHandle::assignHandle();
+	}
+
+	ServiceInstance::~ServiceInstance()
+	{
+		closeSessions();
+
+		if (handle != IntegerHandle::INVALID_HANDLE) {
+			IntegerHandle::releaseHandle(handle);
+			handle = IntegerHandle::INVALID_HANDLE;
+		}
+	}
+
+	unsigned int ServiceInstance::openSession(Terminal *terminal, const vector<ByteArray> &certHashes, void *caller)
 	{
 		unsigned int handle = IntegerHandle::assignHandle();
 
-		ServerSession *session = new ServerSession((ServerReader *)0, packageCert, caller, terminal);
+		ServerSession *session = new ServerSession((ServerReader *)0, certHashes, caller, terminal);
 
 		mapSessions.insert(make_pair(handle, make_pair(session, terminal)));
 
@@ -97,7 +112,7 @@ namespace smartcard_service_api
 		mapSessions.clear();
 	}
 
-	unsigned int ServiceInstance::openChannel(unsigned int session, int channelNum)
+	unsigned int ServiceInstance::openChannel(unsigned int session, int channelNum, const ByteArray &response)
 	{
 		Terminal *terminal = getTerminal(session);
 		ServerChannel *channel = NULL;
@@ -109,10 +124,13 @@ namespace smartcard_service_api
 		{
 			handle = IntegerHandle::assignHandle();
 			mapChannels.insert(make_pair(handle, make_pair(session, channel)));
+
+			if (response != ByteArray::EMPTY)
+				channel->selectResponse = response;
 		}
 		else
 		{
-			SCARD_DEBUG_ERR("alloc failed");
+			_ERR("alloc failed");
 		}
 
 		return handle;

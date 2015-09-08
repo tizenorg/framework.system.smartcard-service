@@ -1,19 +1,18 @@
 /*
-* Copyright (c) 2012 Samsung Electronics Co., Ltd All Rights Reserved
-*
-* Licensed under the Apache License, Version 2.0 (the "License");
-* you may not use this file except in compliance with the License.
-* You may obtain a copy of the License at
-*
-* http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific language governing permissions and
-* limitations under the License.
-*/
-
+ * Copyright (c) 2012, 2013 Samsung Electronics Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 /* standard library header */
 #include <stdio.h>
@@ -26,32 +25,24 @@
 
 namespace smartcard_service_api
 {
-	ISO7816BERTLV::ISO7816BERTLV():TLVHelper()
+	ISO7816BERTLV::ISO7816BERTLV() : TLVHelper(), firstByte(0), tagClass(0),
+		encoding(0)
 	{
-		tagClass = 0;
-		encoding = 0;
 	}
 
-	ISO7816BERTLV::ISO7816BERTLV(TLVHelper *parent):TLVHelper(parent)
+	ISO7816BERTLV::ISO7816BERTLV(TLVHelper *parent) : TLVHelper(parent),
+		firstByte(0), tagClass(0), encoding(0)
 	{
-		parentTLV = parent;
-
-		tagClass = 0;
-		encoding = 0;
 	}
 
-	ISO7816BERTLV::ISO7816BERTLV(const ByteArray &array):TLVHelper(array)
+	ISO7816BERTLV::ISO7816BERTLV(const ByteArray &array) : TLVHelper(array),
+			firstByte(0), tagClass(0), encoding(0)
 	{
-		tagClass = 0;
-		encoding = 0;
 	}
 
-	ISO7816BERTLV::ISO7816BERTLV(const ByteArray &array, TLVHelper *parent):TLVHelper(array, parent)
+	ISO7816BERTLV::ISO7816BERTLV(const ByteArray &array, TLVHelper *parent) :
+		TLVHelper(array, parent), firstByte(0), tagClass(0), encoding(0)
 	{
-		parentTLV = parent;
-
-		tagClass = 0;
-		encoding = 0;
 	}
 
 	ISO7816BERTLV::~ISO7816BERTLV()
@@ -63,7 +54,7 @@ namespace smartcard_service_api
 		}
 	}
 
-	int ISO7816BERTLV::decodeTag(unsigned char *buffer)
+	int ISO7816BERTLV::decodeTag(const unsigned char *buffer)
 	{
 		/* 0x00 is invalid tag value */
 		if (buffer[0] == 0x00)
@@ -72,7 +63,7 @@ namespace smartcard_service_api
 		}
 
 		/* first byte */
-		tagClass = (buffer[0] & 0xE0) >> 6;
+		tagClass = (buffer[0] & 0xC0) >> 6;
 		encoding = (buffer[0] & 0x20) >> 5;
 
 		currentT = buffer[0];
@@ -100,59 +91,63 @@ namespace smartcard_service_api
 		return 2;
 	}
 
-	int ISO7816BERTLV::decodeLength(unsigned char *buffer)
+	int ISO7816BERTLV::decodeLength(const unsigned char *buffer)
 	{
-		if (buffer[0] & 0x80)
+		uint8_t offset = 0;
+		uint8_t count = buffer[offset];
+
+		offset++;
+
+		if (count & 0x80)
 		{
-			uint8_t count = (buffer[0] & 0x7F);
 			uint8_t i;
+
+			count &= ~0x80;
 
 			/* count will be less than 5 */
 			if (count > 4)
 				return -1;
 
-			count++; /* increse count and increase i value, too */
-
-			for (i = 1; i < count; i++)
+			for (i = 0; i < count; i++)
 			{
 				/* if big endian */
-				currentL = (currentL << 8) | buffer[i];
+				currentL = (currentL << 8) | buffer[offset + i];
 
 				/* if little endian */
-				/* currentL = currentL | (buffer[i] << (8 * (i - 1))); */
+				/* currentL = currentL | (buffer[offset + i] << (8 * (i - 1))); */
 			}
 
-			return count;
+			offset += i;
 		}
 		else
 		{
-			currentL = buffer[0];
-
-			return 1;
+			currentL = count;
 		}
+
+		return offset;
 	}
 
-	int ISO7816BERTLV::decodeValue(unsigned char *buffer)
+	int ISO7816BERTLV::decodeValue(const unsigned char *buffer)
 	{
 		if (currentL == 0)
 			return 0;
 
-		currentV.setBuffer(buffer, currentL);
+		currentV.assign(buffer, currentL);
 
 		return currentL;
 	}
 
-	unsigned int ISO7816BERTLV::getClass()
+	unsigned int ISO7816BERTLV::getClass() const
 	{
 		return tagClass;
 	}
 
-	unsigned int ISO7816BERTLV::getEncoding()
+	unsigned int ISO7816BERTLV::getEncoding() const
 	{
 		return encoding;
 	}
 
-	ByteArray ISO7816BERTLV::encode(unsigned int tagClass, unsigned int encoding, unsigned int tag, ByteArray buffer)
+	const ByteArray ISO7816BERTLV::encode(unsigned int tagClass, unsigned int encoding, unsigned int tag, const ByteArray &buffer)
 	{
 		unsigned char temp_tag[3] = { 0, };
 		unsigned char temp_tag_len = 0;
@@ -196,9 +191,9 @@ namespace smartcard_service_api
 		total_len += temp_tag_len;
 
 		/* add length's length */
-		if (buffer.getLength() < 128)
+		if (buffer.size() < 128)
 		{
-			temp_len[0] = buffer.getLength();
+			temp_len[0] = buffer.size();
 
 			temp_len_len = 1;
 		}
@@ -207,32 +202,32 @@ namespace smartcard_service_api
 			temp_len[0] = 0x80;
 			temp_len_len = 1;
 
-			if (buffer.getLength() > 0x00FFFFFF)
+			if (buffer.size() > 0x00FFFFFF)
 			{
-				temp_len[4] = (buffer.getLength() & 0xFF000000) >> 24;
+				temp_len[4] = (buffer.size() & 0xFF000000) >> 24;
 				temp_len_len++;
 			}
 
-			if (buffer.getLength() > 0x0000FFFF)
+			if (buffer.size() > 0x0000FFFF)
 			{
-				temp_len[3] = (buffer.getLength() & 0x00FF0000) >> 16;
+				temp_len[3] = (buffer.size() & 0x00FF0000) >> 16;
 				temp_len_len++;
 			}
 
-			if (buffer.getLength() > 0x000000FF)
+			if (buffer.size() > 0x000000FF)
 			{
-				temp_len[2] = (buffer.getLength() & 0x0000FF00) >> 8;
+				temp_len[2] = (buffer.size() & 0x0000FF00) >> 8;
 				temp_len_len++;
 			}
 
-			temp_len[1] = buffer.getLength() & 0x000000FF;
+			temp_len[1] = buffer.size() & 0x000000FF;
 			temp_len_len++;
 
 			temp_len[0] |= temp_len_len;
 		}
 
 		/* add buffer's length */
-		total_len += buffer.getLength();
+		total_len += buffer.size();
 
 		/* alloc new buffer */
 		temp_buffer = new unsigned char[total_len];
@@ -251,22 +246,22 @@ namespace smartcard_service_api
 		current += temp_len_len;
 
 		/* fill value */
-		if (buffer.getLength() > 0)
-			memcpy(temp_buffer + current, buffer.getBuffer(), buffer.getLength());
+		if (buffer.size() > 0)
+			memcpy(temp_buffer + current, buffer.getBuffer(), buffer.size());
 
-		result.setBuffer(temp_buffer, total_len);
+		result.assign(temp_buffer, total_len);
 
 		delete []temp_buffer;
 
 		return result;
 	}
 
-	ByteArray ISO7816BERTLV::encode(unsigned int tagClass, unsigned int encoding, unsigned int tag, unsigned char *buffer, unsigned int length)
+	const ByteArray ISO7816BERTLV::encode(unsigned int tagClass, unsigned int encoding, unsigned int tag, unsigned char *buffer, unsigned int length)
 	{
 		return encode(tagClass, encoding, tag, ByteArray(buffer, length));
 	}
 
-	TLVHelper *ISO7816BERTLV::getChildTLV(ByteArray data)
+	TLVHelper *ISO7816BERTLV::getChildTLV(const ByteArray &data)
 	{
 		if (childTLV != NULL)
 		{

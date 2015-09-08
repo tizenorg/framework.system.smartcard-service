@@ -1,19 +1,18 @@
 /*
-* Copyright (c) 2012 Samsung Electronics Co., Ltd All Rights Reserved
-*
-* Licensed under the Apache License, Version 2.0 (the "License");
-* you may not use this file except in compliance with the License.
-* You may obtain a copy of the License at
-*
-* http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific language governing permissions and
-* limitations under the License.
-*/
-
+ * Copyright (c) 2012, 2013 Samsung Electronics Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 #ifndef PKCS15OBJECT_H_
 #define PKCS15OBJECT_H_
@@ -32,7 +31,7 @@ using namespace std;
 
 namespace smartcard_service_api
 {
-	class PKCS15Object: public FileObject
+	class PKCS15Object : public FileObject
 	{
 	protected:
 		map<unsigned int, ByteArray> dataList;
@@ -42,16 +41,15 @@ namespace smartcard_service_api
 		static const unsigned int TAG_SEQUENCE = (unsigned int)0x30;
 		static const unsigned int TAG_OCTET_STREAM = (unsigned int)0x04;
 
-//		PKCS15Object();
 		PKCS15Object(Channel *channel);
-		PKCS15Object(Channel *channel, ByteArray selectResponse);
+		PKCS15Object(Channel *channel, const ByteArray &selectResponse);
 		~PKCS15Object();
 
-		int decodePath(ByteArray path, PKCS15Path &result);
-		int getPath(unsigned int type, PKCS15Path &result);
-		int getPaths(vector<PKCS15Path> &paths);
+		int decodePath(const ByteArray &path, PKCS15Path &result);
+		int getPath(unsigned int type, PKCS15Path &result) const;
+		int getPaths(vector<PKCS15Path> &paths) const;
 
-		static ByteArray getOctetStream(const ByteArray &data);
+		static const ByteArray getOctetStream(const ByteArray &data);
 	};
 
 } /* namespace smartcard_service_api */

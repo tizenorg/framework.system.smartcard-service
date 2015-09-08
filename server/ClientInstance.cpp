@@ -1,19 +1,18 @@
 /*
-* Copyright (c) 2012 Samsung Electronics Co., Ltd All Rights Reserved
-*
-* Licensed under the Apache License, Version 2.0 (the "License");
-* you may not use this file except in compliance with the License.
-* You may obtain a copy of the License at
-*
-* http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific language governing permissions and
-* limitations under the License.
-*/
-
+ * Copyright (c) 2012, 2013 Samsung Electronics Co., Ltd.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 /* standard library header */
 #include <pthread.h>
@@ -28,49 +27,29 @@
 
 namespace smartcard_service_api
 {
-	void ClientInstance::setPID(int pid)
+	ServiceInstance *ClientInstance::createService()
 	{
-		this->pid = pid;
+		ServiceInstance *result = NULL;
 
-#if 0
-		if (pid > 0)
+		result = new ServiceInstance(this);
+		if (result != NULL)
 		{
-			certHash = SignatureHelper::getCertificationHash(pid);
-		}
-#endif
-	}
-
-	bool ClientInstance::createService(unsigned int context)
-	{
-		bool result = false;
-
-		if (getService(context) == NULL)
-		{
-			ServiceInstance *instance = new ServiceInstance(this, context);
-			if (instance != NULL)
-			{
-				mapServices.insert(make_pair(context, instance));
-				result = true;
-			}
-			else
-			{
-				SCARD_DEBUG_ERR("alloc failed");
-			}
+			mapServices.insert(make_pair(result->getHandle(), result));
 		}
 		else
 		{
-			SCARD_DEBUG_ERR("service already exist [%d]", context);
+			_ERR("alloc failed");
 		}
 
 		return result;
 	}
 
-	ServiceInstance *ClientInstance::getService(unsigned int context)
+	ServiceInstance *ClientInstance::getService(unsigned int handle)
 	{
 		ServiceInstance *result = NULL;
 		map<unsigned int, ServiceInstance *>::iterator item;
 
-		if ((item = mapServices.find(context)) != mapServices.end())
+		if ((item = mapServices.find(handle)) != mapServices.end())
 		{
 			result = item->second;
 		}
@@ -78,11 +57,11 @@ namespace smartcard_service_api
 		return result;
 	}
 
-	void ClientInstance::removeService(unsigned int context)
+	void ClientInstance::removeService(unsigned int handle)
 	{
 		map<unsigned int, ServiceInstance *>::iterator item;
 
-		if ((item = mapServices.find(context)) != mapServices.end())
+		if ((item = mapServices.find(handle)) != mapServices.end())
 		{
 			delete item->second;
 			mapServices.erase(item);
@@ -101,18 +80,8 @@ namespace smartcard_service_api
 		mapServices.clear();
 	}
 
-	bool ClientInstance::sendMessageToAllServices(int socket, Message &msg)
+	void ClientInstance::generateCertificationHashes()
 	{
-		bool result = true;
-		map<unsigned int, ServiceInstance *>::iterator item;
-
-		for (item = mapServices.begin(); item != mapServices.end(); item++)
-		{
-			if (ServerIPC::getInstance()->sendMessage(socket, &msg) == false)
-				result = false;
-		}
-
-		return result;
+		SignatureHelper::getCertificationHashes(getPID(), certHashes);
 	}
-
 } /* namespace smartcard_service_api */
