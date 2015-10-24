@@ -54,7 +54,7 @@ namespace smartcard_service_api
 				unsigned int *temp2 = NULL;
 
 				temp1 = (unsigned int *)item->second.getBuffer();
-				temp2 = (unsigned int *)item->second.getBuffer();
+				temp2 = (unsigned int *)item->first.getBuffer();
 
 				if(temp1 == NULL || temp2 == NULL)
 					continue;

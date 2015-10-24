@@ -7,7 +7,7 @@
 ################################################################################
 Name:       smartcard-service
 Summary:    Smartcard Service FW
-Version:    0.1.41
+Version:    0.1.44
 Release:    0
 Group:      libs
 License:    Apache-2.0
@@ -152,12 +152,11 @@ rm -f /usr/bin/smartcard-daemon
 %manifest %{name}-server.manifest
 %defattr(-,root,root,-)
 %{bindir}/bin/smartcard-daemon
-%{_datadir}/packages/%{name}-server.xml
 %if 0%{?test_client:1}
 	%{bindir}/bin/smartcard-test-client
 %endif
 %if 0%{?use_autostart:1}
-	%{_datadir}/dbus-1/services/org.tizen.smartcard_service.service
+	%{_datadir}/dbus-1/system-services/org.tizen.SmartcardService.service
 %else
 	%{_sysconfdir}/init.d/%{name}-server
 %endif
@@ -179,6 +178,7 @@ export CFLAGS="$CFLAGS -DTIZEN_DEBUG_ENABLE"
 export CXXFLAGS="$CXXFLAGS -DTIZEN_DEBUG_ENABLE"
 export FFLAGS="$FFLAGS -DTIZEN_DEBUG_ENABLE"
 %endif
+export LDFLAGS+="-Wl,-Bsymbolic-functions"
 mkdir obj-arm-limux-qnueabi
 cd obj-arm-limux-qnueabi
 %cmake .. -DCMAKE_INSTALL_PREFIX=%{_prefix} %{?use_autostart} %{?use_gdbus} %{?test_client}

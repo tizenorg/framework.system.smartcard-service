@@ -256,11 +256,11 @@ namespace smartcard_service_api
 					GDBusHelper::convertVariantToByteArray(var_response, transmitResponse);
 					result = transmitResponse;
 				} else {
-					_ERR("smartcard_service_session_call_get_atr_sync failed, [%d]", rv);
+					_ERR("smartcard_service_session_call_transmit failed, [%d]", rv);
 					THROW_ERROR(rv);
 				}
 			} else {
-				_ERR("smartcard_service_session_call_get_atr_sync failed, [%s]", error->message);
+				_ERR("smartcard_service_session_call_transmit failed, [%s]", error->message);
 				g_error_free(error);
 
 				throw ErrorIO(SCARD_ERROR_IPC_FAILED);

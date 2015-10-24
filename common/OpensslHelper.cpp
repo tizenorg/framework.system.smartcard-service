@@ -96,7 +96,10 @@ namespace smartcard_service_api
 
 			b64 = BIO_new(BIO_f_base64());
 			if(b64 == NULL)
+			{
+				delete []temp;
 				return false;
+			}
 
 			bmem = BIO_new_mem_buf((void *)buffer.getBuffer(), length);
 			if (newLineChar == false)

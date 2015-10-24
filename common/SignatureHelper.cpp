@@ -221,13 +221,15 @@ using namespace smartcard_service_api;
 certiHash *__signature_helper_vector_to_linked_list(vector<ByteArray> &certHashes)
 {
 	vector<ByteArray>::iterator item;
-	certiHash *head, *tail, *tmp;
+	certiHash *head, *tail;
 	uint8_t* buffer = NULL;
 
 	head = tail = NULL;
 
 	for (item = certHashes.begin(); item != certHashes.end(); item++)
 	{
+		certiHash *tmp = NULL;
+
 		if ((tmp = (certiHash *)calloc(1, sizeof(certiHash))) == NULL)
 			goto ERROR;
 
@@ -241,7 +243,11 @@ certiHash *__signature_helper_vector_to_linked_list(vector<ByteArray> &certHashe
 
 		buffer = (*item).getBuffer();
 		if(buffer == NULL)
+		{
+			free(tmp->value);
+			free(tmp);
 			continue;
+		}
 
 		memcpy(tmp->value, buffer, tmp->length);
 		tmp->next = NULL;
@@ -256,10 +262,13 @@ certiHash *__signature_helper_vector_to_linked_list(vector<ByteArray> &certHashe
 			tail = tmp;
 		}
 	}
+
 	return head;
 
 ERROR :
 	_ERR("alloc fail");
+
+	certiHash *tmp;
 
 	while (head)
 	{
